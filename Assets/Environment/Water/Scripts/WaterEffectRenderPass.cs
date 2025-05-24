@@ -1,139 +1,135 @@
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
+using UnityEngine.Rendering.RenderGraphModule;
 using UnityEngine.Rendering.Universal;
+using static WaterRenderPass;
 
-public class WaterEffectRenderPass : ScriptableRenderPass
-{
+public class WaterEffectRenderPass : ScriptableRenderPass {
+
+    [System.Serializable]
+    public class Setting {
+        public RenderPassEvent renderPassEvent = RenderPassEvent.BeforeRenderingPostProcessing;
+        public int resolution;
+        public float fadeRange;
+        public float renderRange;
+    }
+
+    internal class WaterEffectRenderPassPassData {
+        internal RendererListHandle rendererList;
+    }
+
+    public class WaterEffectResultData : ContextItem {
+        public Vector4 rendererCoords;
+
+        public override void Reset() {
+            rendererCoords = Vector4.zero;
+        }
+    }
+
     private const string RenderTag = "WaterEffect";
-    
+    private const string PassName = "WaterEffect Pass";
+
     private const string WaterDynamicEffectsBufferName = "_WaterDynamicEffectsBuffer";
-    private static readonly int _WaterDynamicEffectsBufferID = Shader.PropertyToID(WaterDynamicEffectsBufferName);
+    public static readonly int _WaterDynamicEffectsBufferID = Shader.PropertyToID(WaterDynamicEffectsBufferName);
     private const string WaterDynamicEffectsCoordsName = "_WaterDynamicEffectsCoords";
-    private static readonly int _WaterDynamicEffectsCoordsID = Shader.PropertyToID(WaterDynamicEffectsCoordsName);
+    public static readonly int _WaterDynamicEffectsCoordsID = Shader.PropertyToID(WaterDynamicEffectsCoordsName);
 
-    private readonly ProfilingSampler _profilingSampler = new ProfilingSampler(RenderTag);
-
-    private readonly RenderPassEvent _renderPassEvent = RenderPassEvent.AfterRenderingTransparents;
     private readonly RenderQueueRange _renderQueueRange = RenderQueueRange.all;
     private readonly ShaderTagId _shaderTagId = new ShaderTagId(RenderTag);
 
     private FilteringSettings _filteringSettings;
 
-    public static Vector4 rendererCoords;
+    private Vector4 rendererCoords;
+    private Vector3 centerPosition;
 
-    private static Vector3 centerPosition;
-    private static int CurrentResolution;
-    private static float orthoSize;
+    private Matrix4x4 projection { set; get; }
+    private Matrix4x4 view { set; get; }
 
-    // Setting
-    private float fadeRange;
-    private float renderRange;
-    private int resolution;
-
-    private static Matrix4x4 projection { set; get; }
-    private static Matrix4x4 view { set; get; }
-
-    private static Color m_clearColor = new Color(0.5f, 0.5f, 1.0f, 0);
     private static readonly Quaternion viewRotation = Quaternion.Euler(new Vector3(90f, 0f, 0f));
     private static readonly Vector3 viewScale = new Vector3(1, 1, -1);
     private static Rect viewportRect;
-    private static Vector4 renderCoord;
 
     private static RTHandle renderTarget;
+    private Setting setting;
 
-    public WaterEffectRenderPass(RenderPassEvent renderPassEvent)
+    public WaterEffectRenderPass(Setting setting)
     {
         _filteringSettings = new FilteringSettings(_renderQueueRange);
-        this.renderPassEvent = renderPassEvent;
+        renderPassEvent = setting.renderPassEvent;
+        this.setting = setting;
     }
-
-    public void Setup(ScriptableRenderer renderer, in RenderingData renderingData, WaterEffectRenderFeature.Setting setting)
-    {
-        resolution = setting.resolution;
-        fadeRange = setting.fadeRange;
-        renderRange = setting.renderRange;
-    }
-
     private static Vector3 StabilizeProjection(Vector3 pos, float texelSize)
     {
         float Snap(float coord, float cellSize) => Mathf.FloorToInt(coord / cellSize) * (cellSize) + (cellSize * 0.5f);
-
         return new Vector3(Snap(pos.x, texelSize), Snap(pos.y, texelSize), Snap(pos.z, texelSize));
     }
-    private void SetupProjection(CommandBuffer cmd, Camera camera)
+
+    private void SetupProjection(RasterCommandBuffer cmd, Camera camera)
     {
-        centerPosition = camera.transform.position + (camera.transform.forward * (orthoSize - fadeRange));
-        Debug.Log(centerPosition);
+        centerPosition = camera.transform.position + (camera.transform.forward * (setting.renderRange - setting.fadeRange));
 
-        centerPosition = StabilizeProjection(centerPosition, (orthoSize * 2f) / resolution);
+        centerPosition = StabilizeProjection(centerPosition, (setting.renderRange * 2f) / setting.resolution);
 
-        var frustumHeight = orthoSize * 2f;
+        var frustumHeight = setting.renderRange * 2f;
         centerPosition += (Vector3.up * frustumHeight * 0.5f);
 
-        projection = Matrix4x4.Ortho(-orthoSize, orthoSize, -orthoSize, orthoSize, 0.03f, frustumHeight);
+        projection = Matrix4x4.Ortho(-setting.renderRange, setting.renderRange, -setting.renderRange, setting.renderRange, 0.03f, frustumHeight);
 
         view = Matrix4x4.TRS(centerPosition, viewRotation, viewScale).inverse;
 
         cmd.SetViewProjectionMatrices(view, projection);
 
-        viewportRect.width = resolution;
-        viewportRect.height = resolution;
+        viewportRect.width = setting.resolution;
+        viewportRect.height = setting.resolution;
         cmd.SetViewport(viewportRect);
 
-        rendererCoords.x = centerPosition.x - orthoSize;
-        rendererCoords.y = centerPosition.z - orthoSize;
-        rendererCoords.z = orthoSize * 2f;
-        rendererCoords.w = 1f; //Enable in shader
-    }
-    public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
-    {
-        var cmd = CommandBufferPool.Get(RenderTag);
-        orthoSize = renderRange * 0.5f;
-
-        if (resolution != CurrentResolution || renderTarget == null)
-        {
-            RTHandles.Release(renderTarget);
-            renderTarget = RTHandles.Alloc(resolution, resolution, 1, DepthBits.None,
-                GraphicsFormat.R8G8B8A8_UNorm,
-                filterMode: FilterMode.Bilinear,
-                wrapMode: TextureWrapMode.Clamp,
-                useMipMap: true, //TODO: Expose option
-                autoGenerateMips: true,
-                useDynamicScale : true,
-                enableRandomWrite: true,
-                name: WaterDynamicEffectsBufferName);
-
-            CurrentResolution = resolution;
-        }
-
-
-        using (new ProfilingScope(cmd, _profilingSampler))
-        {
-            ref CameraData cameraData = ref renderingData.cameraData;
-
-            SetupProjection(cmd, cameraData.camera);
-
-            context.ExecuteCommandBuffer(cmd);
-            cmd.Clear();
-
-            cmd.SetRenderTarget(renderTarget);
-            cmd.ClearRenderTarget(true, true, m_clearColor);
-
-            var drawingSettings = CreateDrawingSettings(_shaderTagId, ref renderingData, SortingCriteria.CommonTransparent);
-            var rendererListParams = new RendererListParams(renderingData.cullResults, drawingSettings, _filteringSettings);
-            var rendererList = context.CreateRendererList(ref rendererListParams);
-            cmd.DrawRendererList(rendererList);
-        }
-
-        context.ExecuteCommandBuffer(cmd);
-        CommandBufferPool.Release(cmd);
-
+        rendererCoords.x = centerPosition.x - setting.renderRange;
+        rendererCoords.y = centerPosition.z - setting.renderRange;
+        rendererCoords.z = setting.renderRange * 2f;
+        rendererCoords.w = 1f; //Enable in shaderx
     }
 
-    public static void SetGlobalParameter(CommandBuffer commandBuffer)
+
+    public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData) 
     {
-        commandBuffer.SetGlobalTexture(_WaterDynamicEffectsBufferID, renderTarget);
-        commandBuffer.SetGlobalVector(_WaterDynamicEffectsCoordsID, rendererCoords);
+        // This adds a raster render pass to the graph, specifying the name and the data type that will be passed to the ExecutePass function.
+        using (var builder = renderGraph.AddRasterRenderPass<WaterEffectRenderPassPassData>(PassName, out var passData)) {
+
+            //  RenderingDataでなく、ContextContainerから自分で必要なデータを撮るようになった
+            UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
+            UniversalRenderingData renderingData = frameData.Get<UniversalRenderingData>();
+            UniversalLightData lightData = frameData.Get<UniversalLightData>();
+            UniversalResourceData resourceData = frameData.Get<UniversalResourceData>();
+
+            WaterEffectResultData waterEffectData = frameData.Create<WaterEffectResultData>();
+
+            // Create a temporary texture and set it as the render target
+            RenderTextureDescriptor textureProperties = new RenderTextureDescriptor(setting.resolution, setting.resolution, RenderTextureFormat.ARGBFloat);
+            TextureHandle texture = UniversalRenderer.CreateRenderGraphTexture(renderGraph, textureProperties, WaterDynamicEffectsBufferName, false);
+            builder.SetRenderAttachment(texture, 0, AccessFlags.Write);
+            builder.SetGlobalTextureAfterPass(texture, _WaterDynamicEffectsBufferID);
+
+            builder.AllowPassCulling(false);
+
+            // Render時のソート条件
+            SortingCriteria sortingCriteria = SortingCriteria.CommonTransparent;
+            DrawingSettings drawSettings = RenderingUtils.CreateDrawingSettings(_shaderTagId, renderingData, cameraData, lightData, sortingCriteria);
+
+            RendererListParams rendererListParams = new RendererListParams(renderingData.cullResults, drawSettings, _filteringSettings);
+            passData.rendererList = renderGraph.CreateRendererList(rendererListParams);
+
+            builder.UseRendererList(passData.rendererList);
+
+            // UnsafePassの実行を関数を設定します(つまり旧来のExecuteで呼び出していたPassの描画周り)
+            builder.SetRenderFunc((WaterEffectRenderPassPassData data, RasterGraphContext context) => {
+                using (new ProfilingScope(context.cmd, profilingSampler)) {
+                    SetupProjection(context.cmd, cameraData.camera);
+                    context.cmd.DrawRendererList(data.rendererList);
+
+                    waterEffectData.rendererCoords = rendererCoords;
+                }
+            });
+        }
     }
 }

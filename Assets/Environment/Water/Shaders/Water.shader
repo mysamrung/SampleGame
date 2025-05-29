@@ -2,23 +2,55 @@ Shader "Unlit/Water"
 {
     Properties
     {
-        _ColorTexture("ColorTexture", 2D) = "white" {}
+        [Header(Normal)]
+        [Space(5)]
         _Normal1Texture("Normal1 Texture", 2D) = "bump" {}
         _Normal2Texture("Normal2 Texture", 2D) = "bump" {}
-        _ColorBase("ColorBase", Color) = (1,1,1,1)
-        _ColorDepthMin("ColorDepthMin", Color) = (1,1,1,1)
-        _ColorDepthMax("ColorDepthMax", Color) = (1,1,1,1)
-        _SpecularColor("SpecularColor", Color) = (1,1,1,1)
+        
         _Normal1Strength("NormalStrength", Float) = 1.0
         _Normal2Strength("NormalStrength", Float) = 1.0
-        _SpecularPower("SpecularPower", Float) = 1.0
+
+        [Header(Depth)]
+        [Space(5)]
+        _ColorDepthMin("ColorDepthMin", Color) = (1,1,1,1)
+        _ColorDepthMax("ColorDepthMax", Color) = (1,1,1,1)
+        _Depth("Depth", Float) = 10
+
+        [Header(Specular)]
+        [Space(5)]
+        _SpecularColor("SpecularColor", Color) = (1,1,1,1)
         _SpecularIntensity("SpecularIntensity", Float) = 1.0
-        _ShadowIntenstiy("ShadowIntenstiy", Float) = 1.0
+        _SpecularPower("SpecularPower", Float) = 1.0
+
+        [Header(Light)]
+        [Space(5)]
+        _ColorBaseBright("ColorBaseBright", Color) = (1,1,1,1)
+        _ColorBaseDark("ColorBaseDark", Color) = (1,1,1,1)
         _LightIntensity("LightIntensity", Float) = 1.0
+        _ShadowIntenstiy("ShadowIntenstiy", Float) = 1.0
+
+        [Header(Foam)]
+        [Space(5)]
+        _FoamTexture("FoamTexture", 2D) = "white" {}
+        _FoamHeight("FoamHeight", Float) = 1
+
+        [Header(Distortion)]
+        [Space(5)]
+        _DistortionTexture("DistortionTexture", 2D) = "bump" {}
+        _DistortionStrengthX("DistortionStrengthX", Float) = 1
+        _DistortionStrengthY("DistortionStrengthY", Float) = 1
+
+        [Header(Reflection)]
+        [Space(5)]
+        _ReflectionCubemap("ReflectionCubemap", CUBE) = "" {}
+        _ReflectionIntensity("ReflectionIntensity", Float) = 1
+        _ReflectionPower("ReflectionPower", Float) = 5
+
+        [Header(Wave)]
+        [Space(5)]
         _WaveSpeed("Wave Speed", Vector) = (0, 0, 0, 0)
         _WaveFrequency("Wave Frequency", Float) = 1.0
         _WaveScale("Wave Scale", Float) = 1.0
-        _Depth("Depth", Float) = 10
     }
 
     SubShader
@@ -37,7 +69,8 @@ Shader "Unlit/Water"
             {
                 "LightMode" = "Water"
             }
-            Blend One One
+
+            Blend One OneMinusSrcAlpha
 
             HLSLPROGRAM
             #pragma vertex Vert
@@ -45,12 +78,18 @@ Shader "Unlit/Water"
 
             // フォグ用のシェーダバリアントを生成するための記述
             #pragma multi_compile_fog
+            #pragma multi_compile_instancing
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS_CASCADE
+            
+            #pragma multi_compile_fragment _ _REFLECTION_PROBE_BLENDING
+            #pragma multi_compile_fragment _ _REFLECTION_PROBE_BOX_PROJECTION
+            #pragma multi_compile _ _FORWARD_PLUS
 
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "TexturePacking.hlsl"
 
             struct Attributes
             {
@@ -58,6 +97,8 @@ Shader "Unlit/Water"
                 float3 normal : NORMAL;
                 float4 tangent : TANGENT;
                 float2 uv : TEXCOORD0;
+
+                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
             struct Varyings
@@ -67,56 +108,91 @@ Shader "Unlit/Water"
                 float3 viewDir : TEXCOORD9;
                 float3 worldPos : TEXCOORD1;
                 float3 normal : TEXCOORD2;
-                float4 tangent : TEXCOORD3;
+                float3 tangent : TEXCOORD3;
+                float3 bitangent : TEXCOORD4;
                 
-                float2 colorUV : TEXCOORD4;
                 float2 normal1UV : TEXCOORD5;
                 float2 normal2UV : TEXCOORD6;
+                float2 foamUV : TEXCOORD7;
+                float2 distortionUV : TEXCOORD8;
 
-                half fogFactor : TEXCOORD8;
+                half fogFactor : TEXCOORD10;
+
+                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
-            TEXTURE2D(_ColorTexture);
-            SAMPLER(sampler_ColorTexture);
-
+            TEXTURE2D(_CameraOpaqueTexture);
+            SAMPLER(sampler_CameraOpaqueTexture);
+            
+            TEXTURE2D(_CameraDepthTexture);
+            SAMPLER(sampler_CameraDepthTexture);
+            
+            TEXTURE2D(_WaterDynamicEffectsBuffer);
+            SAMPLER(sampler_WaterDynamicEffectsBuffer);
+            
             TEXTURE2D(_Normal1Texture);
             SAMPLER(sampler_Normal1Texture);
 
             TEXTURE2D(_Normal2Texture);
             SAMPLER(sampler_Normal2Texture);
 
-            TEXTURE2D(_CameraDepthTexture);
-            SAMPLER(sampler_CameraDepthTexture);
+            TEXTURE2D(_FoamTexture);
+            SAMPLER(sampler_FoamTexture);
 
-            TEXTURE2D(_WaterDynamicEffectsBuffer);
-            SAMPLER(sampler_WaterDynamicEffectsBuffer);
+            TEXTURE2D(_DistortionTexture);
+            SAMPLER(sampler_DistortionTexture);
 
-            float4 _ColorTexture_ST;
+            TEXTURECUBE(_ReflectionCubemap);
+            SAMPLER(sampler_ReflectionCubemap);
+
+            // Normal
             float4 _Normal1Texture_ST;
             float4 _Normal2Texture_ST;
-
-            float4 _ColorBase;
-            float4 _ColorDepthMin;
-            float4 _ColorDepthMax;
-            float4 _SpecularColor;
-
-            float4 _WaveSpeed;
-
-            half _LightIntensity;
             half _Normal1Strength;
             half _Normal2Strength;
-            half _SpecularPower;
-            half _SpecularIntensity;
-            half _Depth;
+
+            // Distortion
+            float4 _DistortionTexture_ST;
+            half _DistortionStrengthX;
+            half _DistortionStrengthY;
+
+            // Light
+            float4 _ColorBaseBright;
+            float4 _ColorBaseDark;
+            half _LightIntensity;
             half _ShadowIntenstiy;
+            
+            // Depth
+            float4 _ColorDepthMin;
+            float4 _ColorDepthMax;
+            half _Depth;
+
+            // Specular
+            float4 _SpecularColor;
+            half _SpecularIntensity;
+            half _SpecularPower;
+
+            // Wave
+            half4 _WaveSpeed;
             half _WaveFrequency;
             half _WaveScale;
 
+            // Foam
+            float4 _FoamTexture_ST;
+            half _FoamHeight;
+
+            // Reflection
+            half _ReflectionIntensity;
+            half _ReflectionPower;
+
+            // Effect
             float4 _WaterDynamicEffectsCoords;
 
             Varyings Vert(Attributes IN)
             {
                 Varyings OUT;
+                UNITY_SETUP_INSTANCE_ID(IN);
+                UNITY_TRANSFER_INSTANCE_ID(IN, OUT);
 
                 float3 worldPosition = TransformObjectToWorld(IN.positionOS).xyz;
                 float3 wavePosition = worldPosition;
@@ -135,13 +211,18 @@ Shader "Unlit/Water"
                 OUT.normal = TransformObjectToWorldNormal(IN.normal);
                 OUT.viewDir = TransformWorldToView(OUT.worldPos);
 
-                float sign = IN.tangent.w * GetOddNegativeScale();
                 VertexNormalInputs vni = GetVertexNormalInputs(IN.normal, IN.tangent);
-                OUT.tangent = float4(vni.tangentWS, sign);
+                float sign = IN.tangent.w * GetOddNegativeScale();
+                OUT.tangent = float4(vni.tangentWS, sign).xyz;
+                
+                float3 bitangent = cross(OUT.normal.xyz, OUT.tangent.xyz);
+                OUT.bitangent = bitangent;
 
-                OUT.colorUV = TRANSFORM_TEX(OUT.worldPos.xz, _ColorTexture);
+                // UV
                 OUT.normal1UV = TRANSFORM_TEX(OUT.worldPos.xz, _Normal1Texture) + (_WaveSpeed.xy * _Time.x);
                 OUT.normal2UV = TRANSFORM_TEX(OUT.worldPos.xz, _Normal2Texture) + (_WaveSpeed.zw * _Time.x);
+                OUT.foamUV = TRANSFORM_TEX(OUT.worldPos.xz, _FoamTexture) + (_WaveSpeed.xy * _Time.x);
+                OUT.distortionUV = TRANSFORM_TEX(OUT.worldPos.xz, _DistortionTexture) + (_WaveSpeed.xy * _Time.x);
 
                 OUT.fogFactor = ComputeFogFactor(OUT.positionHCS.z);
                 return OUT;
@@ -168,61 +249,100 @@ Shader "Unlit/Water"
             {
                 return (positionWS.xz - _WaterDynamicEffectsCoords.xy) / (_WaterDynamicEffectsCoords.z);
             }
-
+            
+            void CalculateShorline(float3 worldPos, float3 selfPos, float shorlineHeight, out float shoreline)
+            {
+                float leng = length(worldPos - selfPos);
+                shoreline = saturate((shorlineHeight - leng) / shorlineHeight);
+            }
+            
             float4 Frag(Varyings IN) : SV_Target
             {
+                UNITY_SETUP_INSTANCE_ID(IN);
+
                 float2 screenSpaceUV = IN.screenPos.xy / IN.screenPos.w;
+
+                // Distortion
+                float2 distortion = SAMPLE_TEXTURE2D(_DistortionTexture, sampler_DistortionTexture, IN.distortionUV).xy;
+                distortion = distortion - 0.5;
+                distortion.x *= _DistortionStrengthX;
+                distortion.y *= _DistortionStrengthY;
+
+                distortion.x += 0.015;
+                screenSpaceUV.xy += distortion;
+
                 float cameraDepth = SAMPLE_TEXTURE2D(_CameraDepthTexture, sampler_CameraDepthTexture, screenSpaceUV).r;
                 float3 worldPos = ComputeWorldSpacePosition(screenSpaceUV, cameraDepth, UNITY_MATRIX_I_VP);
 
+                // Depth
                 half depthDiff = (IN.worldPos.y - worldPos.y);
                 half depthIntensity = saturate(depthDiff / _Depth);
-
                 float4 depthColor = lerp(_ColorDepthMin, _ColorDepthMax, depthIntensity);
 
-                float3 normal1TS = UnpackNormalScale(SAMPLE_TEXTURE2D(_Normal1Texture, sampler_Normal1Texture, IN.normal1UV), _Normal1Strength);
-                float3 normal2TS = UnpackNormalScale(SAMPLE_TEXTURE2D(_Normal2Texture, sampler_Normal2Texture, IN.normal2UV), _Normal2Strength);
-
+                // Normal
+                float3 normal1TS = UnpackNormalScale(SAMPLE_TEXTURE2D(_Normal1Texture, sampler_Normal1Texture, IN.normal1UV + distortion), _Normal1Strength);
+                float3 normal2TS = UnpackNormalScale(SAMPLE_TEXTURE2D(_Normal2Texture, sampler_Normal2Texture, IN.normal2UV + distortion), _Normal2Strength);
                 float3 normalTS = normal1TS + normal2TS;
-                float3 bitangent = IN.tangent.w * cross(IN.normal.xyz, IN.tangent.xyz);
-                float3 normal = normalize(mul(normalTS, float3x3(IN.tangent.xyz, bitangent.xyz, IN.normal.xyz)));
+                float3 normal = mul(normalTS, float3x3(IN.tangent.xyz, IN.bitangent.xyz, IN.normal.xyz));
 
+                // Effect
                 float2 effectUV = DynamicEffectsSampleCoords(IN.worldPos);
-                float4 effect = SAMPLE_TEXTURE2D(_WaterDynamicEffectsBuffer, sampler_WaterDynamicEffectsBuffer, effectUV);
-                effect.xy = effect.xy * 2.0 - 1.0;
-                normal = normal + (effect * effect.w);
+                float4 effect = SAMPLE_TEXTURE2D(_WaterDynamicEffectsBuffer, sampler_WaterDynamicEffectsBuffer, effectUV + distortion);
+                float4 effectColor = effect;
+                
+                normal = normalize(normal);
 
+                // Light 
                 Light mainLight = GetMainLight();
-                float3 L = normalize(mainLight.direction);
+                float3 L = mainLight.direction;
                 float3 V = normalize(_WorldSpaceCameraPos - IN.worldPos.xyz);
                 float3 N = IN.normal;
                 float3 N2 = normal;
-                
-                float specular = pow(max(0.0, dot(reflect(-L, N2), V) * dot(reflect(-L, N), V) ), _SpecularPower);  // reflection
-                specular = specular * _SpecularIntensity;
-                float4 specularColor = _SpecularColor * specular;
 
-                float LN2 = max(0.0, dot(L, N2));
-                half4 diffuse = 1;
-                diffuse.rgb = LN2 * mainLight.color * _LightIntensity;
+                float LN2 = saturate(dot(L, N2));
+                float DRLN2V = dot(reflect(-L, N2), V);
+                float DRLNV = dot(reflect(-L, N), V);
 
-                half distanceXZ = length(IN.worldPos.xz - worldPos.xz);
-                half shorline = (1 - saturate(distanceXZ / 1));
-                shorline *= LN2;
+                // Specular
+                float specular = pow(max(0.0, DRLN2V * DRLNV), _SpecularPower);
+                float4 specularColor = _SpecularColor * specular * _SpecularIntensity;
 
-                half4 shadowCoord = TransformWorldToShadowCoord(IN.worldPos.xyz);
+                // Diffuse
+                half4 diffuse = float4(1,1,1,1);
+                diffuse.rgb = lerp(_ColorBaseDark, _ColorBaseBright, LN2) * mainLight.color * _LightIntensity;
+
+                // Foam
+                float4 foam = SAMPLE_TEXTURE2D(_FoamTexture, sampler_FoamTexture, IN.foamUV);
+
+                // Shoreline
+                half shoreline = 0;
+                CalculateShorline(IN.worldPos, worldPos, _FoamHeight, shoreline);
+                foam *= shoreline;
+
+                // Shadow
+                float4 shadowCoord = TransformWorldToShadowCoord(IN.worldPos.xyz);
                 float attenuation = SAMPLE_TEXTURE2D_SHADOW(_MainLightShadowmapTexture, sampler_MainLightShadowmapTexture, shadowCoord.xyz);
                 attenuation = max(_ShadowIntenstiy, attenuation);
 
+                // Reflection
                 half3 reflDir = reflect(-V, N2);
-                half4 refColor = SAMPLE_TEXTURECUBE(unity_SpecCube0, samplerunity_SpecCube0, reflDir);
-                refColor.rgb = DecodeHDR(refColor, unity_SpecCube0_HDR);
+                half3 refColor = SAMPLE_TEXTURECUBE(_ReflectionCubemap, sampler_ReflectionCubemap, reflDir).rgb;
+                refColor *= _ReflectionIntensity;
 
                 // Indirect Specular
                 half ndotv = abs(dot(N, V));
-                refColor = refColor * lerp(0, 1, pow(1 - ndotv, 5)) * 2;
+                half3 inRefColor = refColor * lerp(0, 1, pow(1 - ndotv, _ReflectionPower));
 
-                float4 finalColor = saturate(((diffuse * _ColorBase) * depthColor) + (specularColor * attenuation) + 0) + refColor;
+
+                float4 baseColor = SAMPLE_TEXTURE2D(_CameraOpaqueTexture, sampler_CameraOpaqueTexture, screenSpaceUV);
+                baseColor *= 1 - depthIntensity;
+
+                float4 finalColor = baseColor + ((diffuse * depthColor) * depthColor.w);
+                finalColor.rgb += (specularColor * attenuation).rgb;
+                finalColor.rgb += effectColor.rgb;
+                finalColor.rgb += inRefColor.rgb;
+                finalColor += foam;
+
                 finalColor.rgb = MixFog(finalColor.rgb, IN.fogFactor);
 
                 return finalColor;

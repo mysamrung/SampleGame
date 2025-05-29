@@ -27,9 +27,4 @@ public class WaterRenderFeature : ScriptableRendererFeature
     {
         renderer.EnqueuePass(_waterRenderPass);
     }
-
-    public override void SetupRenderPasses(ScriptableRenderer renderer, in RenderingData renderingData)
-    {
-        _waterRenderPass.Setup(renderer, renderingData);
-    }
 }

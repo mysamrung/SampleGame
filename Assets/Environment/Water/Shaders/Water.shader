@@ -33,6 +33,7 @@ Shader "Unlit/Water"
         [Space(5)]
         _FoamTexture("FoamTexture", 2D) = "white" {}
         _FoamHeight("FoamHeight", Float) = 1
+        _FoamStep("FoamStep", Float) = 0.5
 
         [Header(Distortion)]
         [Space(5)]
@@ -180,6 +181,7 @@ Shader "Unlit/Water"
             // Foam
             float4 _FoamTexture_ST;
             half _FoamHeight;
+            half _FoamStep;
 
             // Reflection
             half _ReflectionIntensity;
@@ -221,7 +223,7 @@ Shader "Unlit/Water"
                 // UV
                 OUT.normal1UV = TRANSFORM_TEX(OUT.worldPos.xz, _Normal1Texture) + (_WaveSpeed.xy * _Time.x);
                 OUT.normal2UV = TRANSFORM_TEX(OUT.worldPos.xz, _Normal2Texture) + (_WaveSpeed.zw * _Time.x);
-                OUT.foamUV = TRANSFORM_TEX(OUT.worldPos.xz, _FoamTexture) + (_WaveSpeed.xy * _Time.x);
+                OUT.foamUV = TRANSFORM_TEX(OUT.worldPos.xz, _FoamTexture) + (_Time.x);
                 OUT.distortionUV = TRANSFORM_TEX(OUT.worldPos.xz, _DistortionTexture) + (_WaveSpeed.xy * _Time.x);
 
                 OUT.fogFactor = ComputeFogFactor(OUT.positionHCS.z);
@@ -310,14 +312,15 @@ Shader "Unlit/Water"
                 // Diffuse
                 half4 diffuse = float4(1,1,1,1);
                 diffuse.rgb = lerp(_ColorBaseDark, _ColorBaseBright, LN2) * mainLight.color * _LightIntensity;
-
+                
                 // Foam
-                float4 foam = SAMPLE_TEXTURE2D(_FoamTexture, sampler_FoamTexture, IN.foamUV);
-
-                // Shoreline
                 half shoreline = 0;
                 CalculateShorline(IN.worldPos, worldPos, _FoamHeight, shoreline);
-                foam *= shoreline;
+                
+                float4 foam = SAMPLE_TEXTURE2D(_FoamTexture, sampler_FoamTexture, IN.foamUV);
+                foam = step(foam, _FoamStep);
+                foam = saturate(foam * shoreline + shoreline);
+                
 
                 // Shadow
                 float4 shadowCoord = TransformWorldToShadowCoord(IN.worldPos.xyz);

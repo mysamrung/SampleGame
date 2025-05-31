@@ -13,12 +13,17 @@ public struct CullData {
     public byte normalX, normalY, normalZ, angleEncoded; // XMUBYTEN4
     public float apexOffset;
 }
-
+public struct CameraModelBufferData {
+    public Matrix4x4 VP;
+    public Matrix4x4 LocalToWorld;
+    public Vector3 CameraPosition;
+    public float Padding; // alignment
+}
 public class MeshletGenerator
 {
 
-    const int MAX_VERTICES = 64;
-    const int MAX_TRIANGLES = 124;
+    public const int MAX_VERTICES = 64;
+    public const int MAX_TRIANGLES = 124;
 
     public static void GenerateMeshlets(
         Mesh mesh,

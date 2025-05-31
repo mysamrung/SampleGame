@@ -1,0 +1,86 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+// GPU struct for meshlet culling input
+struct CullData
+{
+    float4 boundingSphere;  // xyz = center, w = radius
+    uint normalCone;        // XMUBYTEN4 packed as uint
+    float apexOffset;       // offset from center to apex
+};
+
+// Output visibility buffer (1 if visible, 0 if culled)
+AppendStructuredBuffer<uint> VisibleMeshlets : register(u0);
+
+// Input: array of meshlet culling data
+StructuredBuffer<CullData> MeshletCullingData : register(t0);
+
+cbuffer CameraModelBuffer : register(b0)
+{
+    float4x4 VP;
+    float4x4 LocalToWorld;
+    float3 CameraPosition;
+    float Padding; // alignment
+};
+
+
+
+float UnpackByteToFloat(uint b)
+{
+    return (b - 128.0f) / 127.0f;
+}
+
+float3 UnpackNormal(uint packed)
+{
+    float x = UnpackByteToFloat((packed >> 0) & 0xFF);
+    float y = UnpackByteToFloat((packed >> 8) & 0xFF);
+    float z = UnpackByteToFloat((packed >> 16) & 0xFF);
+    return float3(x, y, z);
+}
+
+float UnpackConeAngle(uint packed)
+{
+    float angle = UnpackByteToFloat((packed >> 24) & 0xFF);
+    return angle; // -cos(angle + 90 degrees)
+}
+
+[numthreads(64, 1, 1)]
+void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint index = dispatchThreadID.x;
+    if (index >= MeshletCullingData.Length)
+        return;
+
+    CullData data = MeshletCullingData[index];
+    
+    float scale = length(LocalToWorld[0].xyz); 
+    scale = max(scale, length(LocalToWorld[1].xyz)); 
+    scale = max(scale, length(LocalToWorld[2].xyz)); 
+
+    float3 center = mul(LocalToWorld, data.boundingSphere.xyz);
+    //float radius = data.boundingSphere.w * scale;
+
+    //// Frustum culling via bounding sphere (simple test in clip space)
+    //float4 clipPos = mul(VP, float4(center, 1.0));
+    //clipPos.xyz /= clipPos.w;
+
+    //if (any(abs(clipPos.xyz) > 1.1f)) // Loose threshold
+    //    return;
+
+    // Cone backface culling
+    float3 normal = UnpackNormal(data.normalCone); // Assumed normalized
+    float3x3 rotationOnly = (float3x3)LocalToWorld;
+    float3 axis = normalize(mul(rotationOnly, normal));
+
+    float minDot = UnpackConeAngle(data.normalCone);
+
+    float3 apex = center - axis * data.apexOffset;
+    float3 viewVec = normalize(CameraPosition - apex);
+
+    float dotToView = dot(axis, viewVec);
+    if (dotToView < -minDot)
+        return;
+        
+    // Passed culling
+    VisibleMeshlets.Append(index);
+}

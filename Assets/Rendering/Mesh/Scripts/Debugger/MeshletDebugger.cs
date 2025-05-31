@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using Unity.Android.Gradle;
@@ -14,8 +15,14 @@ public class MeshletDebugger : MonoBehaviour
 
     private Mesh mesh;
 
+    public List<int> preview_meshletIndex = new List<int>();
+
     [SerializeField]
-    private int preview_meshletIndex;
+    private bool showSurface = true;
+    [SerializeField]
+    private bool showNormalCone = true;
+    [SerializeField]
+    private bool alwayShow;
 
     private void OnEnable()
     {
@@ -68,11 +75,21 @@ public class MeshletDebugger : MonoBehaviour
         mesh = newMesh;
     }
 
+    private void OnDrawGizmos() {
+        if (alwayShow)
+            DrawMeshlet();
+    }
+
     private void OnDrawGizmosSelected() {
+        if (!alwayShow)
+            DrawMeshlet();
+    }
+
+    private void DrawMeshlet() {
         if (meshlets != null )
         {
             for (int meshletIndex = 0; meshletIndex < meshlets.Count; meshletIndex++) {
-                if (meshletIndex != preview_meshletIndex)
+                if (preview_meshletIndex == null || !preview_meshletIndex.Contains(meshletIndex))
                     continue;
 
                 var meshlet = meshlets[meshletIndex];
@@ -99,11 +116,16 @@ public class MeshletDebugger : MonoBehaviour
                     center = transform.TransformPoint(center);
                     forwad = transform.TransformDirection(forwad);
                     center += forwad * cullData[meshletIndex].apexOffset;
-                    DrawCone(16, center, radius, forwad, 0.25f);
-                    Gizmos.color = GetColorFromSeed(meshletIndex);
-                    Gizmos.DrawLine(p0, p1);
-                    Gizmos.DrawLine(p1, p2);
-                    Gizmos.DrawLine(p2, p0);
+
+                    if(showNormalCone)
+                        DrawCone(16, center, radius, forwad, 0.25f);
+
+                    if (showSurface) {
+                        Gizmos.color = GetColorFromSeed(meshletIndex);
+                        Gizmos.DrawLine(p0, p1);
+                        Gizmos.DrawLine(p1, p2);
+                        Gizmos.DrawLine(p2, p0);
+                    }
                 }
             }
         }

@@ -1,7 +1,9 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using UnityEngine;
 
+[StructLayout(LayoutKind.Sequential)]
 public struct Meshlet {
     public int vertexOffset;
     public int vertexCount;
@@ -23,7 +25,7 @@ public class MeshletGenerator
 {
 
     public const int MAX_VERTICES = 64;
-    public const int MAX_TRIANGLES = 124;
+    public const int MAX_TRIANGLES = 126;
 
     public static void GenerateMeshlets(
         Mesh mesh,

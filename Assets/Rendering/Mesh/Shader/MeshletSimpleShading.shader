@@ -22,13 +22,8 @@ Shader "Custom/MeshletShader"
                 int triangleOffset;
                 int triangleCount;
             };
-            StructuredBuffer<MeshletData> _MeshletBuffer;
-
-            struct Vertex
-            {
-                float3 position;
-                float3 normal;
-            };
+            StructuredBuffer<MeshletData> _MeshletBuffer : register(t0);
+            StructuredBuffer<uint> _VisibleMeshlets : register(t1);
  
             // Structured buffers passed from C# script
             ByteAddressBuffer  _VertexBuffer;  // All vertices
@@ -68,10 +63,17 @@ Shader "Custom/MeshletShader"
                 v2f o;
 
                 // Get meshlet instance
-                MeshletData meshlet = _MeshletBuffer[v.instanceID];
+                MeshletData meshlet = _MeshletBuffer[_VisibleMeshlets[v.instanceID]];
 
                 // Get the actual index in the index buffer
-                uint index = ReadUShort(_IndexBuffer, (meshlet.triangleOffset + v.vertexID) * 2);
+                uint localOffset = v.vertexID;
+                uint maxIndexCount = meshlet.triangleCount * 3;
+                if(localOffset >= maxIndexCount)
+                    return o;
+
+                uint offsetBase = (meshlet.triangleOffset + localOffset);
+
+                uint index = ReadUShort(_IndexBuffer, offsetBase * 2);
                 float3 vertex = ReadPosition(_VertexBuffer, index * 3 * 4);
 
                 float4 worldPos = float4(vertex, 1.0);

@@ -12,6 +12,7 @@ public class MeshletCulling : MonoBehaviour {
     public ComputeBuffer cameraModelBufferDataBuffer;
     public ComputeBuffer visibilityBuffer;
     public ComputeBuffer drawArgsBuffer;
+    public ComputeBuffer meshletBuffer;
 
     private MeshRenderer meshRenderer;
     private Mesh mesh;
@@ -26,7 +27,7 @@ public class MeshletCulling : MonoBehaviour {
 
     private void OnEnable() {
         meshRenderer = GetComponent<MeshRenderer>();
-        mesh = GetComponent<MeshFilter>().sharedMesh;
+        mesh = GetComponent<MeshFilter>().mesh;
         MeshletGenerator.GenerateMeshlets(mesh, out meshlets, out List<int> vertexBuffer, out List<int> triangleBuffer);
 
         cullData = new List<CullData>();
@@ -66,22 +67,20 @@ public class MeshletCulling : MonoBehaviour {
             }
         }
 
-        Mesh newMesh = new Mesh();
+        mesh.vertices = vertices;
+        mesh.triangles = indices;
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+
         var layout = new[]
-       {
+        {
             new VertexAttributeDescriptor(VertexAttribute.Position, mesh.GetVertexAttributeFormat(VertexAttribute.Position), 3),
         };
 
         mesh.SetVertexBufferParams(mesh.vertexCount, layout);
         mesh.vertexBufferTarget |= GraphicsBuffer.Target.Raw;
         mesh.indexBufferTarget |= GraphicsBuffer.Target.Raw;
-
-        newMesh.vertices = vertices;
-        newMesh.triangles = indices;
-        newMesh.RecalculateNormals();
-        newMesh.RecalculateBounds();
-
-        mesh = newMesh;
+        mesh.indexFormat = IndexFormat.UInt16;
     }
 
     [ContextMenu("Excute")]
@@ -111,11 +110,11 @@ public class MeshletCulling : MonoBehaviour {
         drawArgsBuffer = new ComputeBuffer(1, 5 * sizeof(uint), ComputeBufferType.IndirectArguments);
         uint[] args = new uint[]
         {
-            (uint)MeshletGenerator.MAX_TRIANGLES,       // index count per instance
-            0,                                          // instance count (written by compute shader)
-            0,                                          // start index location
-            0,                                          // base vertex location
-            0                                           // start instance location
+            (uint)MeshletGenerator.MAX_TRIANGLES * 3,       // index count per instance
+            0,                                              // instance count (written by compute shader)
+            0,                                              // start index location
+            0,                                              // base vertex location
+            0                                               // start instance location
         };
         drawArgsBuffer.SetData(args);
 
@@ -153,10 +152,14 @@ public class MeshletCulling : MonoBehaviour {
                 Debug.Log($"Attribute: {attr.attribute}, Format: {attr.format}, Dimension: {attr.dimension}");
             }
 
+            meshletBuffer = new ComputeBuffer(meshlets.Count, Marshal.SizeOf(typeof(Meshlet)), ComputeBufferType.Structured);
+            meshletBuffer.SetData(meshlets);
+
             // 3. Bind buffers to material
             meshRenderer.material.SetBuffer("_VertexBuffer", vertexBuffer);
             meshRenderer.material.SetBuffer("_IndexBuffer", indexBuffer);
-            meshRenderer.material.SetBuffer("_MeshletBuffer", meshletCullingDataBuffer);
+            meshRenderer.material.SetBuffer("_MeshletBuffer", meshletBuffer);
+            meshRenderer.material.SetBuffer("_VisibleMeshlets", visibilityBuffer);
 
             uint[] argsData = new uint[5];
             drawArgsBuffer.GetData(argsData);

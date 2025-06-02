@@ -36,7 +36,7 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
         }
 
         public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData) {
-            DrawIndirectTest[] meshletCullingList = GameObject.FindObjectsByType<DrawIndirectTest>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            MeshletCulling[] meshletCullingList = GameObject.FindObjectsByType<MeshletCulling>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
             using (var builder = renderGraph.AddComputePass<PassData>("Cull Meshlets", out var passData)) {
                 builder.AllowPassCulling(false);
                 builder.SetRenderFunc((PassData data, ComputeGraphContext context) => {

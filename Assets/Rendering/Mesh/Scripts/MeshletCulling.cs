@@ -1,16 +1,17 @@
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 [ExecuteAlways]
 public class MeshletCulling : MonoBehaviour {
     private List<Meshlet> meshlets;
     private List<CullData> cullData;
 
-    private ComputeBuffer meshletCullingDataBuffer;
-    private ComputeBuffer cameraModelBufferDataBuffer;
-    private ComputeBuffer visibilityBuffer;
-    private ComputeBuffer drawArgsBuffer;
+    public ComputeBuffer meshletCullingDataBuffer;
+    public ComputeBuffer cameraModelBufferDataBuffer;
+    public ComputeBuffer visibilityBuffer;
+    public ComputeBuffer drawArgsBuffer;
 
     private MeshRenderer meshRenderer;
     private Mesh mesh;
@@ -21,9 +22,6 @@ public class MeshletCulling : MonoBehaviour {
 #if UNITY_EDITOR
     [SerializeField]
     private MeshletDebugger MeshletDebugger;
-
-    [SerializeField]
-    private bool renderResult;
 #endif
 
     private void OnEnable() {
@@ -69,6 +67,15 @@ public class MeshletCulling : MonoBehaviour {
         }
 
         Mesh newMesh = new Mesh();
+        var layout = new[]
+       {
+            new VertexAttributeDescriptor(VertexAttribute.Position, mesh.GetVertexAttributeFormat(VertexAttribute.Position), 3),
+        };
+
+        mesh.SetVertexBufferParams(mesh.vertexCount, layout);
+        mesh.vertexBufferTarget |= GraphicsBuffer.Target.Raw;
+        mesh.indexBufferTarget |= GraphicsBuffer.Target.Raw;
+
         newMesh.vertices = vertices;
         newMesh.triangles = indices;
         newMesh.RecalculateNormals();
@@ -77,14 +84,8 @@ public class MeshletCulling : MonoBehaviour {
         mesh = newMesh;
     }
 
-    private void LateUpdate () {
-        if(renderResult) {
-            RenderResult();
-        }
-    }
-
     [ContextMenu("Excute")]
-    private void Execute() {
+    public void Execute() {
         meshletCullingDataBuffer = new ComputeBuffer(cullData.Count, Marshal.SizeOf(typeof(CullData)));
         meshletCullingDataBuffer.SetData(cullData);
 
@@ -143,32 +144,38 @@ public class MeshletCulling : MonoBehaviour {
         }
     }
 
-    private void RenderResult() {
+    public void Render(RasterCommandBuffer cmd) {
         if (meshRenderer != null && drawArgsBuffer != null) {
             var vertexBuffer = mesh.GetVertexBuffer(0);
             var indexBuffer = mesh.GetIndexBuffer();
+
+            foreach (var attr in mesh.GetVertexAttributes()) {
+                Debug.Log($"Attribute: {attr.attribute}, Format: {attr.format}, Dimension: {attr.dimension}");
+            }
 
             // 3. Bind buffers to material
             meshRenderer.material.SetBuffer("_VertexBuffer", vertexBuffer);
             meshRenderer.material.SetBuffer("_IndexBuffer", indexBuffer);
             meshRenderer.material.SetBuffer("_MeshletBuffer", meshletCullingDataBuffer);
 
-            Graphics.DrawProceduralIndirect(
+            uint[] argsData = new uint[5];
+            drawArgsBuffer.GetData(argsData);
+            Debug.Log($"Indirect Args: indexCount = {argsData[0]}, instanceCount = {argsData[1]}");
+            
+            cmd.DrawProceduralIndirect(
+                transform.localToWorldMatrix,
                 meshRenderer.material,
-                meshRenderer.bounds,
+                0,
                 MeshTopology.Triangles,
                 drawArgsBuffer
             );
 
-
-            //Graphics.DrawProceduralIndirect(
-            //    meshRenderer.material,
-            //    meshRenderer.bounds,
-            //    MeshTopology.Triangles,
-            //    drawArgsBuffer
-            //);
+            //cmd.DrawMesh(mesh, transform.localToWorldMatrix, meshRenderer.material);
         }
     }
+
+    public GraphicsBuffer GetVertexBuffer() { return mesh.GetVertexBuffer(0); }
+    public GraphicsBuffer GetIndexBuffer() { return mesh.GetIndexBuffer(); }
 
     private void OnDestroy() {
         meshletCullingDataBuffer?.Dispose();

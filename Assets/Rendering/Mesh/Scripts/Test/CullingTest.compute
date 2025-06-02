@@ -1,0 +1,21 @@
+// Culling.compute
+
+#pragma kernel CSMain
+
+RWStructuredBuffer<uint> argsBuffer;
+StructuredBuffer<float4> positions; // just an example input
+
+[numthreads(1, 1, 1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    // Visibility condition (very simple)
+    bool isVisible = positions[0].x > -1000.0;
+
+    uint vertexCount = isVisible ? 3 : 0;
+
+    // Indirect args layout: [vertexCountPerInstance, instanceCount, startVertex, startInstance]
+    argsBuffer[0] = vertexCount;
+    argsBuffer[1] = 1;
+    argsBuffer[2] = 0;
+    argsBuffer[3] = 0;
+}

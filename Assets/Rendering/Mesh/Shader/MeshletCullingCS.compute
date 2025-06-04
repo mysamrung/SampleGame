@@ -1,6 +1,15 @@
 // Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel CSMain
 
+#include "MeshletHeader.hlsl"
+
+
+cbuffer CameraBuffer : register(b0)
+{
+    float3 CameraPosition;
+    float Padding; // alignment
+};
+
 // GPU struct for meshlet culling input
 struct CullData
 {
@@ -10,20 +19,11 @@ struct CullData
 };
 
 // Output visibility buffer (1 if visible, 0 if culled)
-AppendStructuredBuffer<uint> VisibleMeshlets : register(u0);
+AppendStructuredBuffer<MeshletVisible> VisibleMeshlets : register(u0);
 
 // Input: array of meshlet culling data
 StructuredBuffer<CullData> MeshletCullingData : register(t0);
-
-cbuffer CameraModelBuffer : register(b0)
-{
-    float4x4 VP;
-    float4x4 LocalToWorld;
-    float3 CameraPosition;
-    float Padding; // alignment
-};
-
-
+StructuredBuffer<TransformData> Transform : register(t1);
 
 float UnpackByteToFloat(uint b)
 {
@@ -48,16 +48,19 @@ float UnpackConeAngle(uint packed)
 void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint index = dispatchThreadID.x;
-    if (index >= MeshletCullingData.Length)
+    if (index >= MeshletCullingData.Length * Transform.Length)
         return;
 
-    CullData data = MeshletCullingData[index];
-    
-    float scale = length(LocalToWorld[0].xyz); 
-    scale = max(scale, length(LocalToWorld[1].xyz)); 
-    scale = max(scale, length(LocalToWorld[2].xyz)); 
+    uint meshletId = index % MeshletCullingData.Length;
+    uint transformId = index / MeshletCullingData.Length;
 
-    float3 center = mul(LocalToWorld, data.boundingSphere.xyz);
+    CullData data = MeshletCullingData[meshletId];
+
+    float scale = length(Transform[transformId].LocalToWorld[0].xyz); 
+    scale = max(scale, length(Transform[transformId].LocalToWorld[1].xyz)); 
+    scale = max(scale, length(Transform[transformId].LocalToWorld[2].xyz)); 
+
+    float3 center = mul(Transform[transformId].LocalToWorld, data.boundingSphere.xyz);
     //float radius = data.boundingSphere.w * scale;
 
     //// Frustum culling via bounding sphere (simple test in clip space)
@@ -69,7 +72,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     // Cone backface culling
     float3 normal = UnpackNormal(data.normalCone); // Assumed normalized
-    float3x3 rotationOnly = (float3x3)LocalToWorld;
+    float3x3 rotationOnly = (float3x3)Transform[transformId].LocalToWorld;
     float3 axis = normalize(mul(rotationOnly, normal));
 
     float minDot = UnpackConeAngle(data.normalCone);
@@ -82,5 +85,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         return;
         
     // Passed culling
-    VisibleMeshlets.Append(index);
+    MeshletVisible visibleMeshlet;
+    visibleMeshlet.meshletPackId = PackVisibleMeshlet(meshletId, transformId);
+    VisibleMeshlets.Append(visibleMeshlet);
 }

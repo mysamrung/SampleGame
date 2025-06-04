@@ -28,7 +28,7 @@ MonoBehaviour:
   m_Name: MeshletRenderFeature
   m_EditorClassIdentifier: Assembly-CSharp::MeshletRenderFeature
   m_Active: 1
-  computeShader: {fileID: 0}
+  computeShader: {fileID: 7200000, guid: be46d2e3a2a5a164b96b6eef4c94a08b, type: 3}
   drawMaterial: {fileID: 0}
 --- !u!114 &11400000
 MonoBehaviour:

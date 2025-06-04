@@ -16,10 +16,12 @@ public struct CullData {
     public float apexOffset;
 }
 public struct CameraModelBufferData {
-    public Matrix4x4 VP;
-    public Matrix4x4 LocalToWorld;
     public Vector3 CameraPosition;
     public float Padding; // alignment
+}
+
+public struct MeshletVisible {
+    public uint meshletId;
 }
 public class MeshletGenerator
 {
@@ -205,7 +207,7 @@ public class MeshletCullDataGenerator {
 
         float coneAngle = Mathf.Acos(minDot); // radians
         float anglePlus90 = coneAngle + Mathf.Deg2Rad * 90f;
-        float minusCos = -Mathf.Cos(anglePlus90);
+        float minusCos = -Mathf.Cos(anglePlus90 + (5 * Mathf.Deg2Rad));
 
         // Bounding sphere
         Vector3 sphereCenter = Vector3.zero;

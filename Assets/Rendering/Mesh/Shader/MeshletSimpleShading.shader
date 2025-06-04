@@ -14,23 +14,16 @@ Shader "Custom/MeshletShader"
             #pragma target 5.0
             
             #include "unitycg.cginc"
+            #include "MeshletHeader.hlsl"
 
-            struct MeshletData
-            {
-                int vertexOffset;
-                int vertexCount;
-                int triangleOffset;
-                int triangleCount;
-            };
             StructuredBuffer<MeshletData> _MeshletBuffer : register(t0);
-            StructuredBuffer<uint> _VisibleMeshlets : register(t1);
+            StructuredBuffer<MeshletVisible> _VisibleMeshlets : register(t1);
+            StructuredBuffer<TransformData> _Transform : register(t2);
  
             // Structured buffers passed from C# script
             ByteAddressBuffer  _VertexBuffer;  // All vertices
             ByteAddressBuffer  _IndexBuffer;     // All indices for meshlets
-
-            float4 _Color;
-
+            
             struct appdata
             {
                 uint vertexID : SV_VertexID;
@@ -63,7 +56,10 @@ Shader "Custom/MeshletShader"
                 v2f o;
 
                 // Get meshlet instance
-                MeshletData meshlet = _MeshletBuffer[_VisibleMeshlets[v.instanceID]];
+                MeshletVisible visibleMeshlet = _VisibleMeshlets[v.instanceID];
+                uint2 meshletUnpack = UnpackVisibleMeshlet(visibleMeshlet.meshletPackId);
+
+                MeshletData meshlet = _MeshletBuffer[meshletUnpack.x];
 
                 // Get the actual index in the index buffer
                 uint localOffset = v.vertexID;
@@ -77,8 +73,7 @@ Shader "Custom/MeshletShader"
                 float3 vertex = ReadPosition(_VertexBuffer, index * 3 * 4);
 
                 float4 worldPos = float4(vertex, 1.0);
-                o.pos = UnityObjectToClipPos(worldPos);
-                o.color = _Color;
+                o.pos =  mul(_Transform[meshletUnpack.y].MVP, worldPos);
                 return o;
             }
 

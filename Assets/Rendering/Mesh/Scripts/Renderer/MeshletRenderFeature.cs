@@ -13,9 +13,7 @@ public class MeshletRenderFeature : ScriptableRendererFeature
 {
     class MeshletPass : ScriptableRenderPass
     {
-        class PassData
-        {
-        }
+        class PassData { }
 
 
         class MeshletDrawBufferData
@@ -34,12 +32,33 @@ public class MeshletRenderFeature : ScriptableRendererFeature
             public Material material;
         }
 
+        class CameraBufferData
+        {
+            public GraphicsBuffer cameraBuffer;
+            public Matrix4x4 vp;
+        }
+
         struct ModelBuffer
         {
             public Matrix4x4 localToWorld;
             public Matrix4x4 mvp;
         }
 
+        struct CameraBuffer
+        {
+            public Vector3 CameraPosition;
+            public float Padding; // alignment
+
+            public Vector4 leftPlane;
+            public Vector4 rightPlane;
+            public Vector4 downPlane;
+            public Vector4 upPlane;
+            public Vector4 frontPlane;
+            public Vector4 backPlane;
+
+        }
+
+        private CameraBufferData cameraBufferData;
         private ComputeShader cullShader;
 
         List<MeshletDrawBufferData> meshletDrawBufferDataList = new List<MeshletDrawBufferData>();
@@ -54,10 +73,13 @@ public class MeshletRenderFeature : ScriptableRendererFeature
             UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
             UniversalResourceData resourceData = frameData.Get<UniversalResourceData>();
 
-            Matrix4x4 view = cameraData.camera.worldToCameraMatrix;
-            Matrix4x4 projection = GL.GetGPUProjectionMatrix(cameraData.camera.projectionMatrix, true);
-            Matrix4x4 vp = projection * view;
+            /// Camera Buffer
+            if (cameraBufferData == null)
+                cameraBufferData = new CameraBufferData();
 
+            CreateCameraBuffer(cameraData, cameraBufferData);
+
+            /// Draw Buffer
             int meshDrawPoolCount = 0;
             foreach (var mesh in MeshletManager.GetOriginalMeshList())
             {
@@ -70,9 +92,10 @@ public class MeshletRenderFeature : ScriptableRendererFeature
                 if (meshDrawPoolCount >= meshletDrawBufferDataList.Count)
                     meshletDrawBufferDataList.Add(new MeshletDrawBufferData());
 
-                CreateBuffer(renderGraph, meshletDrawBufferDataList[meshDrawPoolCount], meshletCache, meshletList, vp);
+                CreateDrawBuffer(renderGraph, meshletDrawBufferDataList[meshDrawPoolCount], meshletCache, meshletList, cameraBufferData.vp);
                 meshDrawPoolCount++;
             }
+
 
             using (var builder = renderGraph.AddComputePass<PassData>("Cull Meshlets", out var passData))
             {
@@ -80,31 +103,17 @@ public class MeshletRenderFeature : ScriptableRendererFeature
                 builder.EnableAsyncCompute(false);
                 builder.SetRenderFunc((PassData data, ComputeGraphContext context) =>
                 {
-                    CameraModelBufferData cameraModelBufferData = new CameraModelBufferData();
-
-                    if (cameraData.isSceneViewCamera)
-                        cameraModelBufferData.CameraPosition = Camera.main.transform.position;
-                    else
-                        cameraModelBufferData.CameraPosition = cameraData.camera.transform.position;
-
-                    using (ComputeBuffer cameraBuffer = new ComputeBuffer(1, Marshal.SizeOf(typeof(CameraModelBufferData))))
+                    int meshDrawPoolIndex = 0;
+                    foreach (var mesh in MeshletManager.GetOriginalMeshList())
                     {
-                        cameraBuffer.SetData(new[] { cameraModelBufferData });
+                        IList<MeshletObject> meshletList = MeshletManager.GetMeshletObjectListFromOrignalMesh(mesh);
+                        if (meshletList == null || meshletList.Count <= 0)
+                            continue;
 
-                        int meshDrawPoolIndex = 0;
-                        foreach (var mesh in MeshletManager.GetOriginalMeshList())
-                        {
-                            IList<MeshletObject> meshletList = MeshletManager.GetMeshletObjectListFromOrignalMesh(mesh);
-                            if (meshletList == null || meshletList.Count <= 0)
-                                continue;
+                        MeshletCacheData meshletCache = MeshletManager.GetMeshletCacheDataFromOriginalMesh(mesh);
 
-                            MeshletCacheData meshletCache = MeshletManager.GetMeshletCacheDataFromOriginalMesh(mesh);
-
-                            ExecuteCullingGroup(renderGraph, context.cmd, meshletDrawBufferDataList[meshDrawPoolIndex], cameraBuffer);
-                            meshDrawPoolIndex++;
-                        }
-
-                        cameraBuffer?.Dispose();
+                        ExecuteCullingGroup(renderGraph, context.cmd, meshletDrawBufferDataList[meshDrawPoolIndex], cameraBufferData.cameraBuffer);
+                        meshDrawPoolIndex++;
                     }
                 });
             }
@@ -126,7 +135,37 @@ public class MeshletRenderFeature : ScriptableRendererFeature
             }
         }
 
-        private void CreateBuffer(RenderGraph renderGraph, MeshletDrawBufferData meshletDrawBufferData, MeshletCacheData meshletCacheData, IList<MeshletObject> meshletObjects, Matrix4x4 vp)
+        private void CreateCameraBuffer(UniversalCameraData cameraData, CameraBufferData cameraBufferData)
+        {
+            /// Camera Buffer
+            Matrix4x4 view = cameraData.camera.worldToCameraMatrix;
+            Matrix4x4 projection = GL.GetGPUProjectionMatrix(cameraData.camera.projectionMatrix, true);
+            Matrix4x4 vp = projection * view;
+
+            Camera cameraTarget = cameraData.camera;
+            if(cameraData.isSceneViewCamera)
+                cameraTarget = Camera.main;
+
+            CameraBuffer cameraModelBufferData = new CameraBuffer();
+            cameraModelBufferData.CameraPosition = cameraTarget.transform.position;
+    
+            Plane[] cameraPlane = GeometryUtility.CalculateFrustumPlanes(cameraTarget);
+            cameraModelBufferData.leftPlane     = new Vector4(cameraPlane[0].normal.x, cameraPlane[0].normal.y, cameraPlane[0].normal.z, cameraPlane[0].distance);
+            cameraModelBufferData.rightPlane    = new Vector4(cameraPlane[1].normal.x, cameraPlane[1].normal.y, cameraPlane[1].normal.z, cameraPlane[1].distance);
+            cameraModelBufferData.downPlane     = new Vector4(cameraPlane[2].normal.x, cameraPlane[2].normal.y, cameraPlane[2].normal.z, cameraPlane[2].distance);
+            cameraModelBufferData.upPlane       = new Vector4(cameraPlane[3].normal.x, cameraPlane[3].normal.y, cameraPlane[3].normal.z, cameraPlane[3].distance);
+            cameraModelBufferData.frontPlane    = new Vector4(cameraPlane[4].normal.x, cameraPlane[4].normal.y, cameraPlane[4].normal.z, cameraPlane[4].distance);
+            cameraModelBufferData.backPlane     = new Vector4(cameraPlane[5].normal.x, cameraPlane[5].normal.y, cameraPlane[5].normal.z, cameraPlane[5].distance);
+
+
+            if (cameraBufferData.cameraBuffer == null || !cameraBufferData.cameraBuffer.IsValid())
+                cameraBufferData.cameraBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, 1, Marshal.SizeOf(typeof(CameraBuffer)));
+
+            cameraBufferData.cameraBuffer.SetData(new[] { cameraModelBufferData });
+            cameraBufferData.vp = vp;
+        }
+
+        private void CreateDrawBuffer(RenderGraph renderGraph, MeshletDrawBufferData meshletDrawBufferData, MeshletCacheData meshletCacheData, IList<MeshletObject> meshletObjects, Matrix4x4 vp)
         {
             try
             {
@@ -163,11 +202,11 @@ public class MeshletRenderFeature : ScriptableRendererFeature
 
                 uint[] args = new uint[]
                 {
-                (uint)MeshletGenerator.MAX_TRIANGLES * 3,       // index count per instance
-                0,                                              // instance count (written by compute shader)
-                0,                                              // start index location
-                0,                                              // base vertex location
-                0                                               // start instance location
+                    (uint)MeshletGenerator.MAX_TRIANGLES * 3,       // index count per instance
+                    0,                                              // instance count (written by compute shader)
+                    0,                                              // start index location
+                    0,                                              // base vertex location
+                    0                                               // start instance location
                 };
                 meshletDrawBufferData.drawArgsBuffer.SetData(args);
                 meshletDrawBufferData.material = meshletObjects[0].meshRenderer.sharedMaterial;
@@ -194,7 +233,7 @@ public class MeshletRenderFeature : ScriptableRendererFeature
         }
 
 
-        private void ExecuteCullingGroup(RenderGraph renderGraph, ComputeCommandBuffer cmd, MeshletDrawBufferData meshletDrawBufferData, ComputeBuffer cameraBuffer)
+        private void ExecuteCullingGroup(RenderGraph renderGraph, ComputeCommandBuffer cmd, MeshletDrawBufferData meshletDrawBufferData, GraphicsBuffer cameraBuffer)
         {
             // Set compute shader buffers using cmd  
             int kernel = cullShader.FindKernel("CSMain");
@@ -238,6 +277,7 @@ public class MeshletRenderFeature : ScriptableRendererFeature
                 meshletDrawBufferData.drawArgsBuffer = null;
             }
             meshletDrawBufferDataList.Clear();
+            cameraBufferData?.cameraBuffer?.Dispose();
         }
     }
     [SerializeField] ComputeShader computeShader;

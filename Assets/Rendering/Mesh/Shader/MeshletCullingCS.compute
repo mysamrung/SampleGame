@@ -6,8 +6,14 @@
 
 cbuffer CameraBuffer : register(b0)
 {
-    float3 CameraPosition;
+    float3 cameraPosition;
     float Padding; // alignment
+    float4 leftPlane;
+    float4 rightPlane;
+    float4 downPlane;
+    float4 upPlane;
+    float4 frontPlane;
+    float4 backPlane;
 };
 
 // GPU struct for meshlet culling input
@@ -44,6 +50,17 @@ float UnpackConeAngle(uint packed)
     return angle; // -cos(angle + 90 degrees)
 }
 
+bool IsVisible(float3 center, float radius, float4 planes[6])
+{
+    for (int i = 0; i < 6; i++)
+    {
+        float d = dot(planes[i].xyz, center) + planes[i].w;
+        if (d < -radius)
+            return false;
+    }
+    return true;
+}
+
 [numthreads(64, 1, 1)]
 void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
@@ -61,15 +78,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     scale = max(scale, length(Transform[transformId].LocalToWorld[2].xyz)); 
 
     float3 center = mul(Transform[transformId].LocalToWorld, float4(data.boundingSphere.xyz, 1)).xyz;
-    //float radius = data.boundingSphere.w * scale;
-
-    //// Frustum culling via bounding sphere (simple test in clip space)
-    //float4 clipPos = mul(VP, float4(center, 1.0));
-    //clipPos.xyz /= clipPos.w;
-
-    //if (any(abs(clipPos.xyz) > 1.1f)) // Loose threshold
-    //    return;
-
+    float radius = data.boundingSphere.w * scale;
+    
+    float4 planes[6] = { leftPlane, rightPlane, downPlane, upPlane, frontPlane, backPlane };
+    if (!IsVisible(center, radius, planes))
+        return;
+    
     // Cone backface culling
     float3 normal = UnpackNormal(data.normalCone); // Assumed normalized
     float3x3 rotationOnly = (float3x3)Transform[transformId].LocalToWorld;
@@ -78,7 +92,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float minDot = UnpackConeAngle(data.normalCone);
 
     float3 apex = center - axis * data.apexOffset;
-    float3 viewVec = normalize(- apex);
+    float3 viewVec = normalize(cameraPosition - apex);
 
     float dotToView = dot(axis, viewVec);
     if (dotToView < -minDot)

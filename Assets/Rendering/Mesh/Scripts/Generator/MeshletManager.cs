@@ -9,8 +9,11 @@ public class MeshletCacheData {
     public List<CullData> cullData;
     public Mesh convertedMesh;
 
-    public ComputeBuffer meshletCullingDataBuffer;
-    public ComputeBuffer meshletBuffer;
+    public GraphicsBuffer meshletCullingDataBuffer;
+    public GraphicsBuffer meshletBuffer;
+
+    public GraphicsBuffer vertexBuffer;
+    public GraphicsBuffer indexBuffer;
 
     public uint refCounter;
 }
@@ -31,7 +34,6 @@ public class MeshletManager
     public static MeshletCacheData GetMeshletCacheDataFromOriginalMesh(Mesh mesh) {
         return meshletCacheDataDic[mesh];
     }
-
     public static MeshletCacheData CreateMeshletCacheData(Mesh mesh, MeshletObject meshletCulling) {
         if (!meshletCacheDataDic.ContainsKey(mesh)) {
 
@@ -93,6 +95,9 @@ public class MeshletManager
 
             CreateMeshletBuffer(meshletCacheData);
 
+            meshletCacheData.vertexBuffer = meshletCacheData.convertedMesh.GetVertexBuffer(0);
+            meshletCacheData.indexBuffer = meshletCacheData.convertedMesh.GetIndexBuffer();
+
             meshletCacheData.refCounter = 0;
             meshletCacheDataDic.Add(mesh, meshletCacheData);
 
@@ -108,11 +113,23 @@ public class MeshletManager
     }
 
     private static void CreateMeshletBuffer(MeshletCacheData meshletCacheData) {
-        meshletCacheData.meshletCullingDataBuffer = new ComputeBuffer(meshletCacheData.cullData.Count, Marshal.SizeOf(typeof(CullData)));
+        meshletCacheData.meshletCullingDataBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, meshletCacheData.cullData.Count, Marshal.SizeOf(typeof(CullData)));
         meshletCacheData.meshletCullingDataBuffer.SetData(meshletCacheData.cullData);
 
-        meshletCacheData.meshletBuffer = new ComputeBuffer(meshletCacheData.meshlets.Count, Marshal.SizeOf(typeof(Meshlet)), ComputeBufferType.Structured);
+        meshletCacheData.meshletBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, meshletCacheData.meshlets.Count, Marshal.SizeOf(typeof(Meshlet)));
         meshletCacheData.meshletBuffer.SetData(meshletCacheData.meshlets);
+    }
+    public static void ReleaseAll()
+    {
+        foreach (var pair in meshletCacheDataDic)
+        {
+            pair.Value.meshletBuffer?.Dispose();
+            pair.Value.meshletCullingDataBuffer?.Dispose();
+            GameObject.DestroyImmediate(pair.Value.convertedMesh);
+        }
+
+        meshletCacheDataDic.Clear();
+        referenceDic.Clear();
     }
 
     public static void ReleaseMeshlet(MeshletCacheData meshletCacheData, MeshletObject meshletCulling) {
@@ -125,6 +142,8 @@ public class MeshletManager
             if (pair.Value.refCounter <= 0) {
                 pair.Value.meshletBuffer?.Dispose();
                 pair.Value.meshletCullingDataBuffer?.Dispose();
+                pair.Value.vertexBuffer?.Dispose();
+                pair.Value.indexBuffer?.Dispose();  
 
                 GameObject.DestroyImmediate(meshletCacheData.convertedMesh);
                 meshletCacheDataDic.Remove(pair.Key);

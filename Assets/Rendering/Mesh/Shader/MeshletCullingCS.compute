@@ -60,7 +60,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     scale = max(scale, length(Transform[transformId].LocalToWorld[1].xyz)); 
     scale = max(scale, length(Transform[transformId].LocalToWorld[2].xyz)); 
 
-    float3 center = mul(Transform[transformId].LocalToWorld, data.boundingSphere.xyz);
+    float3 center = mul(Transform[transformId].LocalToWorld, float4(data.boundingSphere.xyz, 1)).xyz;
     //float radius = data.boundingSphere.w * scale;
 
     //// Frustum culling via bounding sphere (simple test in clip space)
@@ -78,7 +78,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float minDot = UnpackConeAngle(data.normalCone);
 
     float3 apex = center - axis * data.apexOffset;
-    float3 viewVec = normalize(CameraPosition - apex);
+    float3 viewVec = normalize(- apex);
 
     float dotToView = dot(axis, viewVec);
     if (dotToView < -minDot)

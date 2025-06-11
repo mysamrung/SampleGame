@@ -1,4 +1,5 @@
 using UnityEngine;
+using static UnityEditor.Rendering.CameraUI;
 
 public class SpawnTester : MonoBehaviour
 {
@@ -7,6 +8,12 @@ public class SpawnTester : MonoBehaviour
 
     public Vector2 space;
     public int countPerRow;
+
+    public bool _stopUpdate;
+    public bool _stopUpdateBuffer;
+
+    public static bool stopUpdate;
+    public static bool stopUpdateBuffer;
 
     public void Awake()
     {
@@ -18,4 +25,10 @@ public class SpawnTester : MonoBehaviour
             Instantiate(spawnObject, new Vector3(row * space.x, 0, col * space.y), Quaternion.identity);
         }
     }
+
+    public void OnValidate() {
+        stopUpdate = _stopUpdate;
+        stopUpdateBuffer = _stopUpdateBuffer;
+    }
 }
+

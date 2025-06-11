@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 using UnityEngine;
+using UnityEngine.Jobs;
 using UnityEngine.Rendering;
 
 public class MeshletCacheData {
@@ -18,16 +19,41 @@ public class MeshletCacheData {
     public uint refCounter;
 }
 
-public class MeshletManager
+public class MeshletObjectReferenceData {
+    public List<MeshletObject> meshletObjects = new List<MeshletObject>();
+    public List<Transform> meshletTransforms = new List<Transform>();
+
+    public TransformAccessArray transformAccessArray;
+}
+
+public class MeshletManager : MonoBehaviour 
 {
     private static Dictionary<Mesh, MeshletCacheData> meshletCacheDataDic = new Dictionary<Mesh, MeshletCacheData>();
-    private static Dictionary<Mesh, List<MeshletObject>> referenceDic = new Dictionary<Mesh, List<MeshletObject>>();
+    private static Dictionary<Mesh, MeshletObjectReferenceData> referenceDic = new Dictionary<Mesh, MeshletObjectReferenceData>();
 
-    public static IList<Mesh> GetOriginalMeshList() {
-        return meshletCacheDataDic.Keys.ToList();
+    private static HashSet<MeshletObjectReferenceData> dirtyReferenceDataHashSet = new HashSet<MeshletObjectReferenceData>();
+
+    private void LateUpdate() {
+        if (dirtyReferenceDataHashSet.Count > 0) {
+            foreach (MeshletObjectReferenceData dirtyRefData in dirtyReferenceDataHashSet) {
+                if (dirtyRefData == null)
+                    continue;
+
+                if (dirtyRefData.transformAccessArray.isCreated && dirtyRefData.meshletTransforms.Count != dirtyRefData.transformAccessArray.length)
+                    dirtyRefData.transformAccessArray.Dispose();
+
+                if (!dirtyRefData.transformAccessArray.isCreated)
+                    dirtyRefData.transformAccessArray = new TransformAccessArray(dirtyRefData.meshletTransforms.ToArray());
+            }
+            dirtyReferenceDataHashSet.Clear();
+        }
     }
 
-    public static IList<MeshletObject> GetMeshletObjectListFromOrignalMesh(Mesh mesh) {
+    public static IEnumerable<Mesh> GetOriginalMeshList() {
+        return meshletCacheDataDic.Keys;
+    }
+
+    public static MeshletObjectReferenceData GetMeshletReferenceDataFromOrignalMesh(Mesh mesh) {
         return referenceDic[mesh];
     }
 
@@ -123,12 +149,16 @@ public class MeshletManager
             meshletCacheDataDic.Add(mesh, meshletCacheData);
 
             if (!referenceDic.ContainsKey(mesh))
-                referenceDic.Add(mesh, new List<MeshletObject>());
+                referenceDic.Add(mesh, new MeshletObjectReferenceData());
         }
 
 
         meshletCacheDataDic[mesh].refCounter++;
-        referenceDic[mesh].Add(meshletCulling);
+
+        referenceDic[mesh].meshletTransforms.Add(meshletCulling.transform);
+        referenceDic[mesh].meshletObjects.Add(meshletCulling);
+
+        dirtyReferenceDataHashSet.Add(referenceDic[mesh]);
 
         return meshletCacheDataDic[mesh];
     }
@@ -149,6 +179,12 @@ public class MeshletManager
             GameObject.DestroyImmediate(pair.Value.convertedMesh);
         }
 
+        foreach(var pair in referenceDic) {
+            if(pair.Value.transformAccessArray.isCreated)
+                pair.Value.transformAccessArray.Dispose();
+        }
+
+        dirtyReferenceDataHashSet.Clear();
         meshletCacheDataDic.Clear();
         referenceDic.Clear();
     }
@@ -157,10 +193,16 @@ public class MeshletManager
         var pair = meshletCacheDataDic.SingleOrDefault(s => s.Value == meshletCacheData);
 
         if (pair.Value != null) {
-            referenceDic[pair.Key].Remove(meshletCulling);
-            pair.Value.refCounter--; 
+            referenceDic[pair.Key].meshletObjects.Remove(meshletCulling);
+            referenceDic[pair.Key].meshletTransforms.Remove(meshletCulling.transform);
+            pair.Value.refCounter--;
 
             if (pair.Value.refCounter <= 0) {
+                if (referenceDic[pair.Key].transformAccessArray.isCreated)
+                    referenceDic[pair.Key].transformAccessArray.Dispose();
+
+                referenceDic.Remove(pair.Key);
+
                 pair.Value.meshletBuffer?.Dispose();
                 pair.Value.meshletCullingDataBuffer?.Dispose();
                 pair.Value.vertexBuffer?.Dispose();
@@ -168,6 +210,8 @@ public class MeshletManager
 
                 GameObject.DestroyImmediate(meshletCacheData.convertedMesh);
                 meshletCacheDataDic.Remove(pair.Key);
+            } else {
+                dirtyReferenceDataHashSet.Add(referenceDic[pair.Key]);
             }
         } else {
             Debug.LogError("Not found meshlet in cache manage");

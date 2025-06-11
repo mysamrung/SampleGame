@@ -47,6 +47,8 @@ public class MeshletManager
             }
 
             Vector3[] vertices = new Vector3[vertexBuffer.Count];
+            Vector3[] normals = new Vector3[vertexBuffer.Count];
+            Vector4[] tangents = new Vector4[vertexBuffer.Count];
             int[] indices = new int[triangleBuffer.Count];
 
             for (int meshletIndex = 0; meshletIndex < meshletCacheData.meshlets.Count; meshletIndex++) {
@@ -72,6 +74,22 @@ public class MeshletManager
                     vertices[v1] = p1;
                     vertices[v2] = p2;
 
+                    Vector3 n0 = mesh.normals[v0];
+                    Vector3 n1 = mesh.normals[v1];
+                    Vector3 n2 = mesh.normals[v2];
+
+                    normals[v0] = n0;
+                    normals[v1] = n1;
+                    normals[v2] = n2;
+
+                    Vector4 t0 = mesh.tangents[v0];
+                    Vector4 t1 = mesh.tangents[v1];
+                    Vector4 t2 = mesh.tangents[v2];
+
+                    tangents[v0] = t0;
+                    tangents[v1] = t1;
+                    tangents[v2] = t2;
+
                     indices[triBase + 0] = v0;
                     indices[triBase + 1] = v1;
                     indices[triBase + 2] = v2;
@@ -81,11 +99,14 @@ public class MeshletManager
             meshletCacheData.convertedMesh = new Mesh();
             meshletCacheData.convertedMesh.vertices = vertices;
             meshletCacheData.convertedMesh.triangles = indices;
-            meshletCacheData.convertedMesh.RecalculateNormals();
+            meshletCacheData.convertedMesh.normals = normals;
+            meshletCacheData.convertedMesh.tangents = tangents;
             meshletCacheData.convertedMesh.RecalculateBounds();
 
             var layout = new[] {
                 new VertexAttributeDescriptor(VertexAttribute.Position, meshletCacheData.convertedMesh.GetVertexAttributeFormat(VertexAttribute.Position), 3),
+                new VertexAttributeDescriptor(VertexAttribute.Normal, meshletCacheData.convertedMesh.GetVertexAttributeFormat(VertexAttribute.Normal), 3),
+                new VertexAttributeDescriptor(VertexAttribute.Color, meshletCacheData.convertedMesh.GetVertexAttributeFormat(VertexAttribute.Color), 4),
             };
 
             meshletCacheData.convertedMesh.SetVertexBufferParams(meshletCacheData.convertedMesh.vertexCount, layout);

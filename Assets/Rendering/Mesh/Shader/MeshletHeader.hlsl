@@ -18,6 +18,11 @@ struct TransformData
     float4x4 MVP;
 };
 
+cbuffer CameraData : register(b0)
+{
+    float4x4 VP;
+};
+
 int PackVisibleMeshlet(uint meshletId, uint objectId)
 {
     return meshletId | (objectId << 16);

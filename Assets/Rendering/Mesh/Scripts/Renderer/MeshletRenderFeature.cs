@@ -11,6 +11,8 @@ using Unity.Mathematics;
 using UnityEngine.Jobs;
 using System.Linq;
 using Mono.Cecil.Cil;
+using UnityEngine.Profiling;
+
 
 
 #if UNITY_EDITOR
@@ -20,15 +22,16 @@ using UnityEditor;
 public class MeshletRenderFeature : ScriptableRendererFeature {
     class MeshletPass : ScriptableRenderPass {
         [BurstCompile]
-        struct ModelBufferJob : IJobParallelForTransform {
+        struct ModelBufferJob : IJobParallelFor
+        {
+            [ReadOnly] public NativeArray<Matrix4x4> models;
             public float4x4 vp;
             public NativeArray<ModelBuffer> output;
 
-            public void Execute(int index, TransformAccess transform) {
-                float4x4 model = float4x4.TRS(transform.position, transform.rotation, transform.localScale);
+            public void Execute(int index) {
                 output[index] = new ModelBuffer {
-                    localToWorld = model,
-                    mvp = math.mul(vp, model)
+                    localToWorld = models[index],
+                    mvp = math.mul(vp, models[index])
                 };
             }
         }
@@ -86,6 +89,12 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
             public Matrix4x4 vp;
         }
 
+        class JobGroupHandle
+        {
+            public NativeArray<JobHandle> jobHandles;
+            public JobHandle jobHandle;
+        }
+
         private readonly int SIZEOFMODELBUFFER = Marshal.SizeOf(typeof(ModelBuffer));
         private readonly int SIZEOFMESHLETVISIBLE = Marshal.SizeOf(typeof(MeshletVisible));
         private readonly int SIZEOFCAMERACULLINGBUFFER = Marshal.SizeOf(typeof(CameraCullingBuffer));
@@ -104,23 +113,29 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
         private ComputeShader cullShader;
 
         private List<MeshletDrawBufferData> meshletDrawBufferDataList = new List<MeshletDrawBufferData>();
+        private JobGroupHandle mvpJobHandle = new JobGroupHandle();
+
         public MeshletPass(ComputeShader compute, Material material) {
             this.renderPassEvent = RenderPassEvent.AfterRenderingShadows;
             this.cullShader = compute;
         }
 
         public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData) {
-            //Dispose();
             UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
             UniversalResourceData resourceData = frameData.Get<UniversalResourceData>();
 
+            Profiler.BeginSample("Prepare for Meshlets");
+
             /// Camera Buffer
+            Profiler.BeginSample("Create CameraBuffer");
             if (cameraBufferData == null)
                 cameraBufferData = new CameraBufferData();
 
             CreateCameraBuffer(cameraData, cameraBufferData);
+            Profiler.EndSample();
 
             /// Allocate MeshDraw Buffer Pool
+            Profiler.BeginSample("Allocate MeshletDraw Buffer");
             int meshDrawPoolCount = 0;
             foreach (var mesh in MeshletManager.GetOriginalMeshList()) {
                 MeshletObjectReferenceData meshletReferenceData = MeshletManager.GetMeshletReferenceDataFromOrignalMesh(mesh);
@@ -135,18 +150,44 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
                 meshletDrawBufferDataList[meshDrawPoolCount].meshletCacheData = meshletCache;
                 meshDrawPoolCount++;
             }
+            Profiler.EndSample();
 
             /// Calculate MVPs
-            CalculateMVPs(meshletDrawBufferDataList, cameraBufferData.vp, meshDrawPoolCount);
+            Profiler.BeginSample("Calculate MVP");
+            CalculateMVPs(meshletDrawBufferDataList, cameraBufferData.vp, meshDrawPoolCount, mvpJobHandle);
+            Profiler.EndSample();
 
-            for(int i = 0; i < meshDrawPoolCount; i++) { 
+
+            // Prepare buffer
+            Profiler.BeginSample("Prepare Buffer");
+            for (int i = 0; i < meshDrawPoolCount; i++)
+            {
                 CreateDrawBuffer(renderGraph, meshletDrawBufferDataList[i]);
+                ImportDrawBuffer(renderGraph, meshletDrawBufferDataList[i]);
             }
+            Profiler.EndSample();
+
+            Profiler.EndSample();
 
             using (var builder = renderGraph.AddComputePass<PassData>("Cull Meshlets", out var passData)) {
                 builder.AllowPassCulling(false);
                 builder.EnableAsyncCompute(true);
                 builder.SetRenderFunc((PassData data, ComputeGraphContext context) => {
+
+                    Profiler.BeginSample("Retrieve MVPs");
+                    JobHandle combined = JobHandle.CombineDependencies(mvpJobHandle.jobHandles);
+                    combined.Complete();
+
+                    mvpJobHandle.jobHandles.Dispose();
+                    Profiler.EndSample();
+
+                    Profiler.BeginSample("Set DrawBuffer");
+                    for (int i = 0; i < meshDrawPoolCount; i++)
+                    {
+                        SetDrawBuffer(renderGraph, meshletDrawBufferDataList[i]);
+                    }
+                    Profiler.EndSample();
+
                     int meshDrawPoolIndex = 0;
                     foreach (var mesh in MeshletManager.GetOriginalMeshList()) {
                         MeshletObjectReferenceData meshletReferenceData = MeshletManager.GetMeshletReferenceDataFromOrignalMesh(mesh);
@@ -215,39 +256,32 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
             cameraBufferData.vp = vp;
         }
 
-        private void CalculateMVPs(IList<MeshletDrawBufferData> meshletDrawBufferDataArr, Matrix4x4 vp, int count)
+        private void CalculateMVPs(IList<MeshletDrawBufferData> meshletDrawBufferDataArr, Matrix4x4 vp, int count, JobGroupHandle mvpJobHandle)
         {
-            NativeArray<JobHandle> jobHandles = new NativeArray<JobHandle>(meshletDrawBufferDataArr.Count, Allocator.Temp);
+                mvpJobHandle.jobHandles = new NativeArray<JobHandle>(count, Allocator.Temp);
             for (int i = 0; i < count; i++){
                 MeshletDrawBufferData meshletDrawBufferData = meshletDrawBufferDataArr[i];
 
                 // Model Buffer
-                if (meshletDrawBufferData.modelBufferArray.IsCreated && meshletDrawBufferData.meshletObjectReferenceData.transformAccessArray.length != meshletDrawBufferData.modelBufferArray.Length)
+                if (meshletDrawBufferData.modelBufferArray.IsCreated && meshletDrawBufferData.meshletObjectReferenceData.matrixArray.Length != meshletDrawBufferData.modelBufferArray.Length)
                     meshletDrawBufferData.modelBufferArray.Dispose();
 
                 if (!meshletDrawBufferData.modelBufferArray.IsCreated)
-                    meshletDrawBufferData.modelBufferArray = new NativeArray<ModelBuffer>(meshletDrawBufferData.meshletObjectReferenceData.transformAccessArray.length, Allocator.Persistent);
+                    meshletDrawBufferData.modelBufferArray = new NativeArray<ModelBuffer>(meshletDrawBufferData.meshletObjectReferenceData.matrixArray.Length, Allocator.Persistent);
 
                 // Calculate MVP
                 ModelBufferJob job = new ModelBufferJob {
                     vp = vp,
-                    output = meshletDrawBufferData.modelBufferArray
+                    output = meshletDrawBufferData.modelBufferArray,
+                    models = meshletDrawBufferData.meshletObjectReferenceData.matrixArray
                 };
 
-                JobHandle handle = job.Schedule(meshletDrawBufferData.meshletObjectReferenceData.transformAccessArray);
-                jobHandles[i] = handle;
+                mvpJobHandle.jobHandles[i] = job.Schedule(meshletDrawBufferData.meshletObjectReferenceData.matrixArray.Length, 128);
             }
-
-            JobHandle combined = JobHandle.CombineDependencies(jobHandles);
-            combined.Complete(); 
-
-            jobHandles.Dispose();
         }
 
 
-        private void CreateDrawBuffer(
-            RenderGraph renderGraph, MeshletDrawBufferData meshletDrawBufferData
-        ) {
+        private void CreateDrawBuffer(RenderGraph renderGraph, MeshletDrawBufferData meshletDrawBufferData) {
 
             MeshletCacheData meshletCacheData = meshletDrawBufferData.meshletCacheData;
             IList<MeshletObject> meshletObjects = meshletDrawBufferData.meshletObjectReferenceData.meshletObjects;
@@ -255,23 +289,32 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
             if (meshletDrawBufferData.modelBuffer == null || meshletDrawBufferData.modelBuffer.count != meshletObjects.Count)
                 meshletDrawBufferData.modelBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, meshletObjects.Count, SIZEOFMODELBUFFER);
 
-            meshletDrawBufferData.modelBuffer.SetData(meshletDrawBufferData.modelBufferArray);
-
 
             // Visibility Buffer
             if (meshletDrawBufferData.visibilityBuffer == null || meshletDrawBufferData.visibilityBuffer.count != meshletCacheData.cullData.Count * meshletObjects.Count)
                 meshletDrawBufferData.visibilityBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Append, meshletCacheData.cullData.Count * meshletObjects.Count, SIZEOFMESHLETVISIBLE);
 
-            meshletDrawBufferData.visibilityBuffer.SetCounterValue(0);
-
             // DrawArgs Buffer
             if (meshletDrawBufferData.drawArgsBuffer == null)
                 meshletDrawBufferData.drawArgsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, 1, 5 * sizeof(uint));
 
-           
-            meshletDrawBufferData.drawArgsBuffer.SetData(ARGS);
             meshletDrawBufferData.material = meshletObjects[0].meshRenderer.sharedMaterial;
+        }
 
+        private void SetDrawBuffer(RenderGraph renderGraph, MeshletDrawBufferData meshletDrawBufferData)
+        {
+            meshletDrawBufferData.modelBuffer.SetData(meshletDrawBufferData.modelBufferArray);
+
+            // Visibility Buffer
+            meshletDrawBufferData.visibilityBuffer.SetCounterValue(0);
+
+            // DrawArgs Buffer
+            meshletDrawBufferData.drawArgsBuffer.SetData(ARGS);
+        }
+
+        private void ImportDrawBuffer(RenderGraph renderGraph, MeshletDrawBufferData meshletDrawBufferData)
+        {
+            MeshletCacheData meshletCacheData = meshletDrawBufferData.meshletCacheData;
 
             // Model Buffer
             meshletDrawBufferData.modelBufferHandle = renderGraph.ImportBuffer(meshletDrawBufferData.modelBuffer);

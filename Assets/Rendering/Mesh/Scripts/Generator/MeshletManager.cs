@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Jobs;
 using UnityEngine.Rendering;
@@ -23,7 +24,7 @@ public class MeshletObjectReferenceData {
     public List<MeshletObject> meshletObjects = new List<MeshletObject>();
     public List<Transform> meshletTransforms = new List<Transform>();
 
-    public TransformAccessArray transformAccessArray;
+    public NativeArray<Matrix4x4> matrixArray;
 }
 
 public class MeshletManager : MonoBehaviour 
@@ -39,11 +40,17 @@ public class MeshletManager : MonoBehaviour
                 if (dirtyRefData == null)
                     continue;
 
-                if (dirtyRefData.transformAccessArray.isCreated && dirtyRefData.meshletTransforms.Count != dirtyRefData.transformAccessArray.length)
-                    dirtyRefData.transformAccessArray.Dispose();
+                if (dirtyRefData.matrixArray.IsCreated && dirtyRefData.meshletTransforms.Count != dirtyRefData.matrixArray.Length)
+                    dirtyRefData.matrixArray.Dispose();
 
-                if (!dirtyRefData.transformAccessArray.isCreated)
-                    dirtyRefData.transformAccessArray = new TransformAccessArray(dirtyRefData.meshletTransforms.ToArray());
+                if (!dirtyRefData.matrixArray.IsCreated)
+                {
+                    dirtyRefData.matrixArray = new NativeArray<Matrix4x4>(dirtyRefData.meshletTransforms.Count, Allocator.Persistent);
+                    for(int i = 0; i < dirtyRefData.matrixArray.Length; i++)
+                    {
+                        dirtyRefData.matrixArray[i] = dirtyRefData.meshletTransforms[i].localToWorldMatrix;
+                    }
+                }    
             }
             dirtyReferenceDataHashSet.Clear();
         }
@@ -180,8 +187,8 @@ public class MeshletManager : MonoBehaviour
         }
 
         foreach(var pair in referenceDic) {
-            if(pair.Value.transformAccessArray.isCreated)
-                pair.Value.transformAccessArray.Dispose();
+            if(pair.Value.matrixArray.IsCreated)
+                pair.Value.matrixArray.Dispose();
         }
 
         dirtyReferenceDataHashSet.Clear();
@@ -198,8 +205,8 @@ public class MeshletManager : MonoBehaviour
             pair.Value.refCounter--;
 
             if (pair.Value.refCounter <= 0) {
-                if (referenceDic[pair.Key].transformAccessArray.isCreated)
-                    referenceDic[pair.Key].transformAccessArray.Dispose();
+                if (referenceDic[pair.Key].matrixArray.IsCreated)
+                    referenceDic[pair.Key].matrixArray.Dispose();
 
                 referenceDic.Remove(pair.Key);
 

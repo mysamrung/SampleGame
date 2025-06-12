@@ -25,6 +25,7 @@ public class MeshletObjectReferenceData {
     public List<Transform> meshletTransforms = new List<Transform>();
 
     public NativeArray<Matrix4x4> matrixArray;
+    public NativeArray<Bounds> boundArray;
 }
 
 public class MeshletManager : MonoBehaviour 
@@ -40,6 +41,7 @@ public class MeshletManager : MonoBehaviour
                 if (dirtyRefData == null)
                     continue;
 
+                // Matrix Array 
                 if (dirtyRefData.matrixArray.IsCreated && dirtyRefData.meshletTransforms.Count != dirtyRefData.matrixArray.Length)
                     dirtyRefData.matrixArray.Dispose();
 
@@ -50,7 +52,18 @@ public class MeshletManager : MonoBehaviour
                     {
                         dirtyRefData.matrixArray[i] = dirtyRefData.meshletTransforms[i].localToWorldMatrix;
                     }
-                }    
+                }
+
+                // Bound Array
+                if (dirtyRefData.boundArray.IsCreated && dirtyRefData.meshletTransforms.Count != dirtyRefData.boundArray.Length)
+                    dirtyRefData.boundArray.Dispose();
+
+                if (!dirtyRefData.boundArray.IsCreated) {
+                    dirtyRefData.boundArray = new NativeArray<Bounds>(dirtyRefData.meshletTransforms.Count, Allocator.Persistent);
+                    for (int i = 0; i < dirtyRefData.matrixArray.Length; i++) {
+                        dirtyRefData.boundArray[i] = dirtyRefData.meshletObjects[i].meshRenderer.bounds;
+                    }
+                }
             }
             dirtyReferenceDataHashSet.Clear();
         }

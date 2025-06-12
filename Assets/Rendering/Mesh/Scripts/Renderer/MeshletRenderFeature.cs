@@ -25,14 +25,38 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
         struct ModelBufferJob : IJobParallelFor
         {
             [ReadOnly] public NativeArray<Matrix4x4> models;
-            public float4x4 vp;
-            public NativeArray<ModelBuffer> output;
+            [ReadOnly] public NativeArray<Bounds> bounds;
+            [ReadOnly] public float4x4 vp;
+            [ReadOnly] public NativeArray<float4> planes; // 6 planes
+
+            [WriteOnly] public NativeList<ModelBuffer>.ParallelWriter output;
 
             public void Execute(int index) {
-                output[index] = new ModelBuffer {
+                Bounds b = bounds[index];
+                float3 center = b.center;
+                float3 extents = b.extents;
+
+                // SAT-based frustum culling
+                for (int i = 0; i < 6; i++) {
+                    float4 p = planes[i];
+                    float3 normal = p.xyz;
+
+                    // Project half extents onto plane normal
+                    float r = extents.x * math.abs(normal.x) +
+                              extents.y * math.abs(normal.y) +
+                              extents.z * math.abs(normal.z);
+
+                    float distance = math.dot(normal, center) + p.w;
+
+                    if (distance + r < 0f) {
+                        return; // Outside, early exit
+                    }
+                }
+
+                output.AddNoResize(new ModelBuffer {
                     localToWorld = models[index],
                     mvp = math.mul(vp, models[index])
-                };
+                });
             }
         }
 
@@ -49,7 +73,7 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
 
             public BufferHandle cullingBufferHandle;
 
-            public NativeArray<ModelBuffer> modelBufferArray;
+            public NativeList<ModelBuffer> modelBufferArray;
             
             public MeshletCacheData meshletCacheData;
             public MeshletObjectReferenceData meshletObjectReferenceData;
@@ -60,6 +84,9 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
         class CameraBufferData {
             public GraphicsBuffer cameraCullingBuffer;
             public GraphicsBuffer cameraDrawingBuffer;
+
+            public NativeArray<float4> planes = new NativeArray<float4>(6, Allocator.Persistent);
+
             public Camera camreaTarget;
             public Matrix4x4 vp;
         }
@@ -154,7 +181,7 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
 
             /// Calculate MVPs
             Profiler.BeginSample("Calculate MVP");
-            CalculateMVPs(meshletDrawBufferDataList, cameraBufferData.vp, meshDrawPoolCount, mvpJobHandle);
+            CalculateMVPs(meshletDrawBufferDataList, cameraBufferData, meshDrawPoolCount, mvpJobHandle);
             Profiler.EndSample();
 
 
@@ -237,6 +264,12 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
             cameraCullingBufferData.frontPlane = new Vector4(cameraPlane[4].normal.x, cameraPlane[4].normal.y, cameraPlane[4].normal.z, cameraPlane[4].distance);
             cameraCullingBufferData.backPlane = new Vector4(cameraPlane[5].normal.x, cameraPlane[5].normal.y, cameraPlane[5].normal.z, cameraPlane[5].distance);
 
+            cameraBufferData.planes[0] = cameraCullingBufferData.leftPlane;
+            cameraBufferData.planes[1] = cameraCullingBufferData.rightPlane;
+            cameraBufferData.planes[2] = cameraCullingBufferData.downPlane;
+            cameraBufferData.planes[3] = cameraCullingBufferData.upPlane;
+            cameraBufferData.planes[4] = cameraCullingBufferData.frontPlane;
+            cameraBufferData.planes[5] = cameraCullingBufferData.backPlane;
 
             if (cameraBufferData.cameraCullingBuffer == null || !cameraBufferData.cameraCullingBuffer.IsValid())
                 cameraBufferData.cameraCullingBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, 1, SIZEOFCAMERACULLINGBUFFER);
@@ -256,9 +289,9 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
             cameraBufferData.vp = vp;
         }
 
-        private void CalculateMVPs(IList<MeshletDrawBufferData> meshletDrawBufferDataArr, Matrix4x4 vp, int count, JobGroupHandle mvpJobHandle)
+        private void CalculateMVPs(IList<MeshletDrawBufferData> meshletDrawBufferDataArr, CameraBufferData cameraBufferData, int count, JobGroupHandle mvpJobHandle)
         {
-                mvpJobHandle.jobHandles = new NativeArray<JobHandle>(count, Allocator.Temp);
+            mvpJobHandle.jobHandles = new NativeArray<JobHandle>(count, Allocator.Temp);
             for (int i = 0; i < count; i++){
                 MeshletDrawBufferData meshletDrawBufferData = meshletDrawBufferDataArr[i];
 
@@ -267,13 +300,17 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
                     meshletDrawBufferData.modelBufferArray.Dispose();
 
                 if (!meshletDrawBufferData.modelBufferArray.IsCreated)
-                    meshletDrawBufferData.modelBufferArray = new NativeArray<ModelBuffer>(meshletDrawBufferData.meshletObjectReferenceData.matrixArray.Length, Allocator.Persistent);
+                    meshletDrawBufferData.modelBufferArray = new NativeList<ModelBuffer>(meshletDrawBufferData.meshletObjectReferenceData.matrixArray.Length, Allocator.Persistent);
+
+                meshletDrawBufferData.modelBufferArray.Clear();
 
                 // Calculate MVP
                 ModelBufferJob job = new ModelBufferJob {
-                    vp = vp,
-                    output = meshletDrawBufferData.modelBufferArray,
-                    models = meshletDrawBufferData.meshletObjectReferenceData.matrixArray
+                    vp = cameraBufferData.vp,
+                    planes = cameraBufferData.planes,
+                    models = meshletDrawBufferData.meshletObjectReferenceData.matrixArray,
+                    bounds = meshletDrawBufferData.meshletObjectReferenceData.boundArray,
+                    output = meshletDrawBufferData.modelBufferArray.AsParallelWriter()
                 };
 
                 mvpJobHandle.jobHandles[i] = job.Schedule(meshletDrawBufferData.meshletObjectReferenceData.matrixArray.Length, 128);
@@ -286,9 +323,9 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
             MeshletCacheData meshletCacheData = meshletDrawBufferData.meshletCacheData;
             IList<MeshletObject> meshletObjects = meshletDrawBufferData.meshletObjectReferenceData.meshletObjects;
 
+            // Model Buffer
             if (meshletDrawBufferData.modelBuffer == null || meshletDrawBufferData.modelBuffer.count != meshletObjects.Count)
                 meshletDrawBufferData.modelBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, meshletObjects.Count, SIZEOFMODELBUFFER);
-
 
             // Visibility Buffer
             if (meshletDrawBufferData.visibilityBuffer == null || meshletDrawBufferData.visibilityBuffer.count != meshletCacheData.cullData.Count * meshletObjects.Count)
@@ -303,7 +340,7 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
 
         private void SetDrawBuffer(RenderGraph renderGraph, MeshletDrawBufferData meshletDrawBufferData)
         {
-            meshletDrawBufferData.modelBuffer.SetData(meshletDrawBufferData.modelBufferArray);
+            meshletDrawBufferData.modelBuffer.SetData(meshletDrawBufferData.modelBufferArray.AsArray());
 
             // Visibility Buffer
             meshletDrawBufferData.visibilityBuffer.SetCounterValue(0);
@@ -339,7 +376,7 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
             cmd.SetComputeConstantBufferParam(cullShader, Shader.PropertyToID("CameraBuffer"), cameraBuffer, 0, cameraBuffer.stride);
 
             // Dispatch compute shader  
-            cmd.DispatchCompute(cullShader, kernel, Mathf.CeilToInt((meshletDrawBufferData.meshletCacheData.cullData.Count * meshletDrawBufferData.modelBuffer.count) / 64.0f), 1, 1);
+            cmd.DispatchCompute(cullShader, kernel, Mathf.CeilToInt((meshletDrawBufferData.meshletCacheData.cullData.Count * meshletDrawBufferData.modelBufferArray.Length) / 64.0f), 1, 1);
             cmd.CopyCounterValue(meshletDrawBufferData.visibilityBufferHandle, meshletDrawBufferData.drawArgsBufferHandle, sizeof(uint)); // offset 4 bytes (index 1)
         }
 

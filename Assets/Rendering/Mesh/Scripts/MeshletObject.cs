@@ -16,7 +16,7 @@ public class MeshletObject : MonoBehaviour {
 
 #if UNITY_EDITOR
     [SerializeField]
-    private MeshletDebugger MeshletDebugger;
+    private MeshletDebugger meshletDebugger;
 #endif
 
     private void OnEnable() {
@@ -69,20 +69,22 @@ public class MeshletObject : MonoBehaviour {
         cullCompute.Dispatch(kernel, Mathf.CeilToInt(MeshletCacheData.cullData.Count / 64.0f), 1, 1);
         ComputeBuffer.CopyCount(visibilityBuffer, drawArgsBuffer, sizeof(uint)); // offset 4 bytes (index 1)
 
-        if (MeshletDebugger != null) {
+#if UNITY_EDITOR
+        if (meshletDebugger != null) {
             int[] result = new int[5];
             drawArgsBuffer.GetData(result);
 
             var resultVisible = new MeshletVisible[result[1]];
             visibilityBuffer.GetData(result);
 
-            MeshletDebugger.preview_meshletIndex.Clear();
+            meshletDebugger.preview_meshletIndex.Clear();
             foreach (var data in resultVisible) {
-                MeshletDebugger.preview_meshletIndex.Add((int)(data.meshletId & 0xFFFF));
+                meshletDebugger.preview_meshletIndex.Add((int)(data.meshletId & 0xFFFF));
             }
 
             visibilityBuffer.GetData(result);
         }
+#endif
     }
 
     public void Render(RasterCommandBuffer cmd) {

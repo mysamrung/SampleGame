@@ -1,5 +1,4 @@
 using UnityEngine;
-using static UnityEditor.Rendering.CameraUI;
 
 public class SpawnTester : MonoBehaviour
 {

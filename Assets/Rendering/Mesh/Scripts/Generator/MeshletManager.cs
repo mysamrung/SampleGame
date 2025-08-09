@@ -24,6 +24,7 @@ public class MeshletObjectReferenceData {
     public List<MeshletObject> meshletObjects = new List<MeshletObject>();
     public List<Transform> meshletTransforms = new List<Transform>();
 
+    public TransformAccessArray TransformAccessArray;
     public NativeArray<Matrix4x4> matrixArray;
     public NativeArray<Bounds> boundArray;
 }
@@ -35,6 +36,17 @@ public class MeshletManager : MonoBehaviour
 
     private static HashSet<MeshletObjectReferenceData> dirtyReferenceDataHashSet = new HashSet<MeshletObjectReferenceData>();
 
+    public bool ignoreCulling;
+    public bool ignoreDrawing;
+    public bool ignoreMVPCalcuate;
+    public bool ignoreSetBuffer;
+    public bool ignoreExcuteCullingCP;
+
+    public static MeshletManager instance;
+
+    private void Awake() {
+        instance = this;
+    }
     private void LateUpdate() {
         if (dirtyReferenceDataHashSet.Count > 0) {
             foreach (MeshletObjectReferenceData dirtyRefData in dirtyReferenceDataHashSet) {
@@ -52,6 +64,8 @@ public class MeshletManager : MonoBehaviour
                     {
                         dirtyRefData.matrixArray[i] = dirtyRefData.meshletTransforms[i].localToWorldMatrix;
                     }
+
+                    dirtyRefData.TransformAccessArray = new TransformAccessArray(dirtyRefData.meshletTransforms.ToArray());
                 }
 
                 // Bound Array

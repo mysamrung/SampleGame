@@ -9,9 +9,15 @@ using Unity.Jobs;
 using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine.Jobs;
-using System.Linq;
-using Mono.Cecil.Cil;
 using UnityEngine.Profiling;
+using System;
+using System;
+using Unity.Collections.LowLevel.Unsafe;
+using Unity.Jobs.LowLevel.Unsafe;
+
+
+
+
 
 
 
@@ -59,6 +65,206 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
                 });
             }
         }
+        [BurstCompile]
+        struct ModelBufferJobTransform : IJobParallelForTransform {
+            [ReadOnly] public NativeArray<Matrix4x4> models;
+            [ReadOnly] public NativeArray<Bounds> bounds;
+            [ReadOnly] public float4x4 vp;
+            [ReadOnly] public NativeArray<float4> planes; // 6 planes
+
+            [NoAlias][NativeDisableParallelForRestriction] 
+            public NativeArray<ModelBuffer> output;
+            
+            [NativeDisableParallelForRestriction] 
+            public NativeCounter.ParallelWriter counter;
+
+            public void Execute(int index, TransformAccess transform) {
+                Bounds b = bounds[index];
+                float3 center = b.center;
+                float3 extents = b.extents;
+
+                // SAT-based frustum culling
+                for (int i = 0; i < 6; i++) {
+                    float4 p = planes[i];
+                    float3 normal = p.xyz;
+
+                    // Project half extents onto plane normal
+                    float r = extents.x * math.abs(normal.x) +
+                              extents.y * math.abs(normal.y) +
+                              extents.z * math.abs(normal.z);
+
+                    float distance = math.dot(normal, center) + p.w;
+
+                    if (distance + r < 0f) {
+                        return; // Outside, early exit
+                    }
+                }
+
+                output[index] = new ModelBuffer {
+                    localToWorld = transform.localToWorldMatrix,
+                    mvp = math.mul(vp, transform.localToWorldMatrix)
+                };
+
+                counter.Increment();
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        [NativeContainer]
+        public unsafe struct NativeCounter {
+            // The actual pointer to the allocated count needs to have restrictions relaxed so jobs can be scheduled with this container
+            [NativeDisableUnsafePtrRestriction]
+            private int* countIntegers;
+
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            private AtomicSafetyHandle m_Safety;
+
+            // The dispose sentinel tracks memory leaks. It is a managed type so it is cleared to null when scheduling a job
+            // The job cannot dispose the container, and no one else can dispose it until the job has run, so it is ok to not pass it along
+            // This attribute is required, without it this NativeContainer cannot be passed to a job; since that would give the job access to a managed object
+            [NativeSetClassTypeToNullOnSchedule]
+            private DisposeSentinel m_DisposeSentinel;
+#endif
+
+            // Keep track of where the memory for this was allocated
+            private readonly Allocator m_AllocatorLabel;
+
+            public const int INTS_PER_CACHE_LINE = JobsUtility.CacheLineSize / sizeof(int);
+
+            public NativeCounter(Allocator label) {
+                // This check is redundant since we always use an int that is blittable.
+                // It is here as an example of how to check for type correctness for generic types.
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+                if (!UnsafeUtility.IsBlittable<int>()) {
+                    throw new ArgumentException(
+                        string.Format("{0} used in NativeQueue<{0}> must be blittable", typeof(int)));
+                }
+#endif
+                this.m_AllocatorLabel = label;
+
+                // Allocate native memory for a single integer
+                this.countIntegers = (int*)UnsafeUtility.Malloc(
+                    UnsafeUtility.SizeOf<int>() * INTS_PER_CACHE_LINE * JobsUtility.MaxJobThreadCount, 4, label);
+
+                // Create a dispose sentinel to track memory leaks. This also creates the AtomicSafetyHandle
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+                DisposeSentinel.Create(out this.m_Safety, out this.m_DisposeSentinel, 0, label);
+#endif
+                // Initialize the count to 0 to avoid uninitialized data
+                this.Count = 0;
+            }
+
+            public void Increment() {
+                // Verify that the caller has write permission on this data. 
+                // This is the race condition protection, without these checks the AtomicSafetyHandle is useless
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+                AtomicSafetyHandle.CheckWriteAndThrow(this.m_Safety);
+#endif
+                (*this.countIntegers)++;
+            }
+
+            public int Count {
+                get {
+                    // Verify that the caller has read permission on this data. 
+                    // This is the race condition protection, without these checks the AtomicSafetyHandle is useless
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+                    AtomicSafetyHandle.CheckReadAndThrow(this.m_Safety);
+#endif
+                    int count = 0;
+                    for (int i = 0; i < JobsUtility.MaxJobThreadCount; ++i) {
+                        count += this.countIntegers[INTS_PER_CACHE_LINE * i];
+                    }
+
+                    return count;
+                }
+
+                set {
+                    // Verify that the caller has write permission on this data. 
+                    // This is the race condition protection, without these checks the AtomicSafetyHandle is useless
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+                    AtomicSafetyHandle.CheckWriteAndThrow(this.m_Safety);
+#endif
+                    // Clear all locally cached counts, 
+                    // set the first one to the required value
+                    for (int i = 1; i < JobsUtility.MaxJobThreadCount; ++i) {
+                        this.countIntegers[INTS_PER_CACHE_LINE * i] = 0;
+                    }
+
+                    *this.countIntegers = value;
+                }
+            }
+
+            public bool IsCreated {
+                get {
+                    return this.countIntegers != null;
+                }
+            }
+
+            public void Dispose() {
+                // Let the dispose sentinel know that the data has been freed so it does not report any memory leaks
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+                DisposeSentinel.Dispose(ref this.m_Safety, ref this.m_DisposeSentinel);
+#endif
+
+                UnsafeUtility.Free(this.countIntegers, this.m_AllocatorLabel);
+                this.countIntegers = null;
+            }
+
+            [NativeContainer]
+            // This attribute is what makes it possible to use NativeCounter.Concurrent in a ParallelFor job
+            [NativeContainerIsAtomicWriteOnly]
+            public struct ParallelWriter {
+                // Copy of the pointer from the full NativeCounter
+                [NativeDisableUnsafePtrRestriction]
+                private int* countIntegers;
+
+                // Copy of the AtomicSafetyHandle from the full NativeCounter. The dispose sentinel is not copied since this inner struct does not own the memory and is not responsible for freeing it.
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+                private AtomicSafetyHandle m_Safety;
+#endif
+
+                // The current worker thread index; it must use this exact name since it is injected
+                [NativeSetThreadIndex]
+                int m_ThreadIndex;
+
+                // This is what makes it possible to assign to NativeCounter.Concurrent from NativeCounter
+                public static implicit operator ParallelWriter(NativeCounter cnt) {
+                    ParallelWriter parallelWriter;
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+                    AtomicSafetyHandle.CheckWriteAndThrow(cnt.m_Safety);
+                    parallelWriter.m_Safety = cnt.m_Safety;
+                    AtomicSafetyHandle.UseSecondaryVersion(ref parallelWriter.m_Safety);
+#endif
+
+                    parallelWriter.countIntegers = cnt.countIntegers;
+                    parallelWriter.m_ThreadIndex = 0;
+
+                    return parallelWriter;
+                }
+
+                public void Increment() {
+                    // Increment still needs to check for write permissions
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+                    AtomicSafetyHandle.CheckWriteAndThrow(this.m_Safety);
+#endif
+
+                    // No need for atomics any more since we are just incrementing the local count
+                    ++this.countIntegers[INTS_PER_CACHE_LINE * this.m_ThreadIndex];
+                }
+
+                public int Count() {
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+                    AtomicSafetyHandle.CheckReadAndThrow(this.m_Safety);
+#endif
+                    int count = 0;
+                    for (int i = 0; i < JobsUtility.MaxJobThreadCount; ++i) {
+                        count += this.countIntegers[INTS_PER_CACHE_LINE * i];
+                    }
+
+                    return count;
+                }
+            }
+        }
 
         class PassData { }
 
@@ -73,7 +279,8 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
 
             public BufferHandle cullingBufferHandle;
 
-            public NativeList<ModelBuffer> modelBufferArray;
+            public NativeArray<ModelBuffer> modelBufferArray;
+            public NativeCounter nativeCounter;
             
             public MeshletCacheData meshletCacheData;
             public MeshletObjectReferenceData meshletObjectReferenceData;
@@ -142,6 +349,8 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
         private List<MeshletDrawBufferData> meshletDrawBufferDataList = new List<MeshletDrawBufferData>();
         private JobGroupHandle mvpJobHandle = new JobGroupHandle();
 
+        private bool refresh = true;
+
         public MeshletPass(ComputeShader compute, Material material) {
             this.renderPassEvent = RenderPassEvent.AfterRenderingShadows;
             this.cullShader = compute;
@@ -179,67 +388,79 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
             }
             Profiler.EndSample();
 
+
+            // Prepare buffer
+            Profiler.BeginSample("Prepare Buffer");
+            for (int i = 0; i < meshDrawPoolCount; i++) {
+                CreateDrawBuffer(renderGraph, meshletDrawBufferDataList[i]);
+                ImportDrawBuffer(renderGraph, meshletDrawBufferDataList[i]);
+            }
+            Profiler.EndSample();
+
+
             /// Calculate MVPs
             Profiler.BeginSample("Calculate MVP");
             CalculateMVPs(meshletDrawBufferDataList, cameraBufferData, meshDrawPoolCount, mvpJobHandle);
             Profiler.EndSample();
 
 
-            // Prepare buffer
-            Profiler.BeginSample("Prepare Buffer");
-            for (int i = 0; i < meshDrawPoolCount; i++)
-            {
-                CreateDrawBuffer(renderGraph, meshletDrawBufferDataList[i]);
-                ImportDrawBuffer(renderGraph, meshletDrawBufferDataList[i]);
-            }
             Profiler.EndSample();
 
-            Profiler.EndSample();
 
-            using (var builder = renderGraph.AddComputePass<PassData>("Cull Meshlets", out var passData)) {
-                builder.AllowPassCulling(false);
-                builder.EnableAsyncCompute(true);
-                builder.SetRenderFunc((PassData data, ComputeGraphContext context) => {
+            if(MeshletManager.instance == null || !MeshletManager.instance.ignoreCulling) { 
+                using (var builder = renderGraph.AddComputePass<PassData>("Cull Meshlets", out var passData)) {
+                    builder.AllowPassCulling(false);
+                    builder.EnableAsyncCompute(true);
+                    builder.SetRenderFunc((PassData data, ComputeGraphContext context) => {
 
-                    Profiler.BeginSample("Retrieve MVPs");
-                    JobHandle combined = JobHandle.CombineDependencies(mvpJobHandle.jobHandles);
-                    combined.Complete();
+                        if (MeshletManager.instance == null || !MeshletManager.instance.ignoreMVPCalcuate) {
+                            Profiler.BeginSample("Retrieve MVPs");
+                            JobHandle combined = JobHandle.CombineDependencies(mvpJobHandle.jobHandles);
+                            combined.Complete();
 
-                    mvpJobHandle.jobHandles.Dispose();
-                    Profiler.EndSample();
+                            mvpJobHandle.jobHandles.Dispose();
+                            Profiler.EndSample();
+                        }
 
-                    Profiler.BeginSample("Set DrawBuffer");
-                    for (int i = 0; i < meshDrawPoolCount; i++)
-                    {
-                        SetDrawBuffer(renderGraph, meshletDrawBufferDataList[i]);
-                    }
-                    Profiler.EndSample();
 
-                    int meshDrawPoolIndex = 0;
-                    foreach (var mesh in MeshletManager.GetOriginalMeshList()) {
-                        MeshletObjectReferenceData meshletReferenceData = MeshletManager.GetMeshletReferenceDataFromOrignalMesh(mesh);
-                        if (meshletReferenceData == null || meshletReferenceData.meshletObjects.Count <= 0)
-                            continue;
+                        if (MeshletManager.instance == null || !MeshletManager.instance.ignoreSetBuffer) {
+                            Profiler.BeginSample("Set DrawBuffer");
+                            for (int i = 0; i < meshDrawPoolCount; i++) {
+                                SetDrawBuffer(renderGraph, meshletDrawBufferDataList[i]);
+                            }
+                            Profiler.EndSample();
+                        }
 
-                        MeshletCacheData meshletCache = MeshletManager.GetMeshletCacheDataFromOriginalMesh(mesh);
+                        if (MeshletManager.instance == null || !MeshletManager.instance.ignoreExcuteCullingCP) {
+                            int meshDrawPoolIndex = 0;
+                            foreach (var mesh in MeshletManager.GetOriginalMeshList()) {
+                                MeshletObjectReferenceData meshletReferenceData = MeshletManager.GetMeshletReferenceDataFromOrignalMesh(mesh);
+                                if (meshletReferenceData == null || meshletReferenceData.meshletObjects.Count <= 0)
+                                    continue;
 
-                        ExecuteCullingGroup(renderGraph, context.cmd, meshletDrawBufferDataList[meshDrawPoolIndex], cameraBufferData.cameraCullingBuffer);
-                        meshDrawPoolIndex++;
-                    }
-                });
+                                MeshletCacheData meshletCache = MeshletManager.GetMeshletCacheDataFromOriginalMesh(mesh);
+
+                                ExecuteCullingGroup(renderGraph, context.cmd, meshletDrawBufferDataList[meshDrawPoolIndex], cameraBufferData.cameraCullingBuffer);
+                                meshDrawPoolIndex++;
+                            }
+                        }
+                    });
+                }
             }
 
-            using (var builder = renderGraph.AddRasterRenderPass<PassData>("Draw Meshlets", out var passData)) {
-                builder.SetRenderAttachment(resourceData.activeColorTexture, 0);
-                builder.SetRenderAttachmentDepth(resourceData.activeDepthTexture);
+            if (MeshletManager.instance == null || !MeshletManager.instance.ignoreDrawing) {
+                using (var builder = renderGraph.AddRasterRenderPass<PassData>("Draw Meshlets", out var passData)) {
+                    builder.SetRenderAttachment(resourceData.activeColorTexture, 0);
+                    builder.SetRenderAttachmentDepth(resourceData.activeDepthTexture);
 
-                builder.AllowPassCulling(false);
+                    builder.AllowPassCulling(false);
 
-                builder.SetRenderFunc((PassData data, RasterGraphContext ctx) => {
-                    foreach (var meshletDrawBufferData in meshletDrawBufferDataList) {
-                        RenderMeshletGroup(ctx.cmd, meshletDrawBufferData, cameraBufferData.cameraDrawingBuffer);
-                    }
-                });
+                    builder.SetRenderFunc((PassData data, RasterGraphContext ctx) => {
+                        foreach (var meshletDrawBufferData in meshletDrawBufferDataList) {
+                            RenderMeshletGroup(ctx.cmd, meshletDrawBufferData, cameraBufferData.cameraDrawingBuffer);
+                        }
+                    });
+                }
             }
         }
 
@@ -295,25 +516,24 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
             for (int i = 0; i < count; i++){
                 MeshletDrawBufferData meshletDrawBufferData = meshletDrawBufferDataArr[i];
 
-                // Model Buffer
-                if (meshletDrawBufferData.modelBufferArray.IsCreated && meshletDrawBufferData.meshletObjectReferenceData.matrixArray.Length != meshletDrawBufferData.modelBufferArray.Length)
-                    meshletDrawBufferData.modelBufferArray.Dispose();
-
-                if (!meshletDrawBufferData.modelBufferArray.IsCreated)
-                    meshletDrawBufferData.modelBufferArray = new NativeList<ModelBuffer>(meshletDrawBufferData.meshletObjectReferenceData.matrixArray.Length, Allocator.Persistent);
-
-                meshletDrawBufferData.modelBufferArray.Clear();
+                int matrixCount = meshletDrawBufferData.meshletObjectReferenceData.matrixArray.Length;
 
                 // Calculate MVP
-                ModelBufferJob job = new ModelBufferJob {
+                meshletDrawBufferData.modelBuffer.UnlockBufferAfterWrite<ModelBuffer>(matrixCount);
+                meshletDrawBufferData.modelBufferArray = meshletDrawBufferData.modelBuffer.LockBufferForWrite<ModelBuffer>(0, matrixCount);
+
+
+                meshletDrawBufferData.nativeCounter = new NativeCounter(Allocator.TempJob);
+                ModelBufferJobTransform job = new ModelBufferJobTransform {
                     vp = cameraBufferData.vp,
                     planes = cameraBufferData.planes,
                     models = meshletDrawBufferData.meshletObjectReferenceData.matrixArray,
                     bounds = meshletDrawBufferData.meshletObjectReferenceData.boundArray,
-                    output = meshletDrawBufferData.modelBufferArray.AsParallelWriter()
+                    output = meshletDrawBufferData.modelBufferArray,
+                    counter = meshletDrawBufferData.nativeCounter
                 };
 
-                mvpJobHandle.jobHandles[i] = job.Schedule(meshletDrawBufferData.meshletObjectReferenceData.matrixArray.Length, 128);
+                mvpJobHandle.jobHandles[i] = job.ScheduleReadOnly(meshletDrawBufferData.meshletObjectReferenceData.TransformAccessArray, 128);
             }
         }
 
@@ -324,8 +544,12 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
             IList<MeshletObject> meshletObjects = meshletDrawBufferData.meshletObjectReferenceData.meshletObjects;
 
             // Model Buffer
-            if (meshletDrawBufferData.modelBuffer == null || meshletDrawBufferData.modelBuffer.count != meshletObjects.Count)
-                meshletDrawBufferData.modelBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, meshletObjects.Count, SIZEOFMODELBUFFER);
+            if (meshletDrawBufferData.modelBuffer == null || meshletDrawBufferData.modelBuffer.count != meshletObjects.Count) {
+                meshletDrawBufferData.modelBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, GraphicsBuffer.UsageFlags.LockBufferForWrite, meshletObjects.Count, SIZEOFMODELBUFFER);
+                meshletDrawBufferData.modelBufferArray = meshletDrawBufferData.modelBuffer.LockBufferForWrite<ModelBuffer>(0, meshletObjects.Count);
+                for (var i = 0; i < meshletObjects.Count; i++)
+                    meshletDrawBufferData.modelBufferArray[i] = new ModelBuffer();
+            }
 
             // Visibility Buffer
             if (meshletDrawBufferData.visibilityBuffer == null || meshletDrawBufferData.visibilityBuffer.count != meshletCacheData.cullData.Count * meshletObjects.Count)
@@ -340,7 +564,8 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
 
         private void SetDrawBuffer(RenderGraph renderGraph, MeshletDrawBufferData meshletDrawBufferData)
         {
-            meshletDrawBufferData.modelBuffer.SetData(meshletDrawBufferData.modelBufferArray.AsArray());
+            //// Model Buffer
+            //meshletDrawBufferData.modelBuffer.SetData(meshletDrawBufferData.modelBufferArray.AsArray());
 
             // Visibility Buffer
             meshletDrawBufferData.visibilityBuffer.SetCounterValue(0);
@@ -376,7 +601,7 @@ public class MeshletRenderFeature : ScriptableRendererFeature {
             cmd.SetComputeConstantBufferParam(cullShader, Shader.PropertyToID("CameraBuffer"), cameraBuffer, 0, cameraBuffer.stride);
 
             // Dispatch compute shader  
-            cmd.DispatchCompute(cullShader, kernel, Mathf.CeilToInt((meshletDrawBufferData.meshletCacheData.cullData.Count * meshletDrawBufferData.modelBufferArray.Length) / 64.0f), 1, 1);
+            cmd.DispatchCompute(cullShader, kernel, Mathf.CeilToInt((meshletDrawBufferData.meshletCacheData.cullData.Count * meshletDrawBufferData.nativeCounter.Count) / 64.0f), 1, 1);
             cmd.CopyCounterValue(meshletDrawBufferData.visibilityBufferHandle, meshletDrawBufferData.drawArgsBufferHandle, sizeof(uint)); // offset 4 bytes (index 1)
         }
 

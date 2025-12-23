@@ -62,6 +62,8 @@ MeshRenderer:
   m_RayTracingAccelStructBuildFlagsOverride: 0
   m_RayTracingAccelStructBuildFlags: 1
   m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
@@ -83,6 +85,7 @@ MeshRenderer:
   m_AutoUVMaxDistance: 0.5
   m_AutoUVMaxAngle: 89
   m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
@@ -226,10 +229,41 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: -453750087388946865, guid: 0f00ad5694779164aaaf270f03ff656e, type: 3}
       insertIndex: -1
       addedObject: {fileID: 6500344840124837579}
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: -7434008128576307933, guid: 0f00ad5694779164aaaf270f03ff656e, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 3556749995908982605}
   m_SourcePrefab: {fileID: -7498925157353702193, guid: 0f00ad5694779164aaaf270f03ff656e, type: 3}
 --- !u!4 &2114334397029378041 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -453750087388946865, guid: 0f00ad5694779164aaaf270f03ff656e, type: 3}
   m_PrefabInstance: {fileID: 7270053748195621302}
   m_PrefabAsset: {fileID: 0}
+--- !u!1 &8949061082402899093 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: -7434008128576307933, guid: 0f00ad5694779164aaaf270f03ff656e, type: 3}
+  m_PrefabInstance: {fileID: 7270053748195621302}
+  m_PrefabAsset: {fileID: 0}
+--- !u!136 &3556749995908982605
+CapsuleCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8949061082402899093}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 2
+  m_Radius: 1.53
+  m_Height: 17.3
+  m_Direction: 1
+  m_Center: {x: 0.32, y: 8.22, z: 0.08}

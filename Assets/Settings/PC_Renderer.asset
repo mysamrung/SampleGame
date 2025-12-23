@@ -1,5 +1,18 @@
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
+--- !u!114 &-8102460500918629982
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c8f1f03fb5889da478c2bbf95f229f74, type: 3}
+  m_Name: CustomDeferredGBufferFeature
+  m_EditorClassIdentifier: Assembly-CSharp::CustomDeferredGBufferFeature
+  m_Active: 0
 --- !u!114 &-5544583051448890996
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -27,7 +40,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ed5eb09ea60432a458e678fecb7e2956, type: 3}
   m_Name: MeshletRenderFeature
   m_EditorClassIdentifier: Assembly-CSharp::MeshletRenderFeature
-  m_Active: 1
+  m_Active: 0
   computeShader: {fileID: 7200000, guid: be46d2e3a2a5a164b96b6eef4c94a08b, type: 3}
   drawMaterial: {fileID: 0}
 --- !u!114 &11400000
@@ -59,7 +72,8 @@ MonoBehaviour:
   - {fileID: -5544583051448890996}
   - {fileID: 2943740985935503269}
   - {fileID: -4864519868671870018}
-  m_RendererFeatureMap: ad6b866f10d7b46c8cc9bc5617af0db3a59f7181d444da28bebbfbe8f3c07dbc
+  - {fileID: -8102460500918629982}
+  m_RendererFeatureMap: ad6b866f10d7b46c8cc9bc5617af0db3a59f7181d444da28bebbfbe8f3c07dbca2891c641a478e8f
   m_UseNativeRenderPass: 1
   xrSystemData: {fileID: 0}
   postProcessData: {fileID: 11400000, guid: 41439944d30ece34e96484bdb6645b55, type: 2}
@@ -83,7 +97,7 @@ MonoBehaviour:
   m_CopyDepthMode: 0
   m_DepthAttachmentFormat: 0
   m_DepthTextureFormat: 0
-  m_AccurateGbufferNormals: 0
+  m_AccurateGbufferNormals: 1
   m_IntermediateTextureMode: 0
 --- !u!114 &2943740985935503269
 MonoBehaviour:
